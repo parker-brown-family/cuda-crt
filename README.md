@@ -1,27 +1,35 @@
-# CUDA virtual phosphor surface (lab)
+# cuda-crt
 
-A standalone research prototype. It gives one tile of a desktop a phosphor that
-remembers: when a letter changes, the old one fades instead of vanishing, and
-the glass in front of it (curve, rim, scanlines, tracking band, glare) is drawn
-from that fading state.
+A CRT you can run on a GPU: a phosphor that remembers, behind curved glass.
 
-It is built three ways so the comparison is fair:
+When a letter on screen changes, the old one fades instead of vanishing, glows a
+little, and leaves a faint ghost. The glass in front (curve, rounded rim,
+scanlines, a tracking band, glare) is drawn from that fading light. It runs as
+CUDA kernels on textures shared with OpenGL, so a frame never leaves the GPU.
+
+This is a research lab, not a product. It began as an experiment to find out
+whether CUDA earns a place doing what a shader already does well, and it keeps
+the evidence: every path is measured against the same glass shader the
+[omarchy-crt](https://github.com/parker-brown-family/omarchy-crt) plugin ships.
+Read `decision.md` for what was found.
+
+**Nothing here touches a live desktop.** It renders offscreen through a headless
+EGL context and installs nothing outside this folder.
+
+## What is in it
 
 | Path | What it is |
 |---|---|
-| `existing` | the shipped `crt/crt-glass.frag`, unmodified, read at run time: one pass, no memory |
-| `glsl` | phosphor state + glass as fragment shaders (`shaders/`) |
-| `cuda` | phosphor state + glass as CUDA kernels (`kernels/phosphor.cu`) on textures shared with OpenGL, no CPU copies |
-
-**Nothing here touches the live desktop.** It renders offscreen through a
-headless EGL context, installs nothing outside this folder, and reads
-`crt/crt-glass.frag` without writing it. Read `audit.md` first, then
-`decision.md`.
+| `existing` | the shipped omarchy-crt glass shader, unmodified (`baseline/`): one pass, no memory |
+| `glsl` | phosphor state + glass as fragment shaders (`shaders/`), the matched comparison |
+| `cuda` | first pass: the same phosphor and glass as CUDA kernels |
+| `cuda2` | second pass: half-precision state, halation, an afterglow ghost, swelling strokes, a power-on degauss, an optional aperture mask |
+| vector mode | no input picture: a beam's strokes deposit light straight into the phosphor |
 
 ## Build
 
 Needs an NVIDIA GPU and driver, `g++`, `libepoxy`, `uv` and `ffmpeg`. No CUDA
-toolkit: the kernel is compiled at run time by NVRTC and run through the
+toolkit: the kernels are compiled at run time by NVRTC and run through the
 driver's own `libcuda.so`.
 
 ```bash
@@ -36,86 +44,89 @@ make
 
 ## Run
 
-Can this box do it? One fact per line:
+Can this machine do it? One fact per line:
 
 ```bash
 bin/probe .
 ```
 
-Stage 1, correctness against the CPU reference (24 checks, exit 0 when all pass):
+The correctness suite: each kernel against a CPU reference (exit 0 when all pass):
 
 ```bash
 bin/stage1_test .
 ```
 
-Stage 2, the benchmark. Writes `results.csv` and three smaller tables in `out/`.
-About three minutes; close anything heavy on the GPU first:
-
-```bash
-bin/stage2_bench .
-```
-
-The tests' own teeth: four deliberately broken kernels, each of which the suite must fail:
+Do the tests have teeth? Seven deliberately broken kernels, each of which the
+suite must fail:
 
 ```bash
 tools/mutate.sh
 ```
 
-How the GPU's clock moves under a 60 Hz load, one line per second (this is the
-measurement `decision.md` turns on; sample `nvidia-smi` beside it):
+The benchmark. Writes `results.csv` and smaller tables in `out/`. About five
+minutes; close anything heavy on the GPU first:
 
 ```bash
-bin/stage2_bench . power cuda_full 2400
+tools/final_bench.sh
 ```
 
-The live demo: terminal footage through two renderers at once, side by side in
-one window, in real time (close it with `q`; `f` is fullscreen). `--dry` runs
-every act with no window:
+The live demo: two renderers side by side in one window, in real time (`q`
+closes it, `f` is fullscreen; `--dry` runs every act with no window):
 
 ```bash
 tools/demo.sh
 ```
 
-Footage. Any video in, CRT video out:
+Any video in, CRT video out:
 
 ```bash
-ffmpeg -i in.mp4 -f rawvideo -pix_fmt rgba - | bin/crt_render . --size 1280x720 --fps 60 --path cuda --decay 50 | ffmpeg -f rawvideo -pix_fmt rgba -s 1280x720 -r 60 -i - -pix_fmt yuv420p out.mp4
+ffmpeg -i in.mp4 -f rawvideo -pix_fmt rgba - | bin/crt_render . --size 1280x720 --fps 60 --path cuda2 | ffmpeg -f rawvideo -pix_fmt rgba -s 1280x720 -r 60 -i - -pix_fmt yuv420p out.mp4
 ```
 
-The built-in terminal fixtures (`typing`, `flash`, `tiles`, `hold`):
+Vector mode, no input:
 
 ```bash
-uv run --with pillow tools/fixture.py typing --size 1280x720 --fps 60 | ffmpeg -y -f rawvideo -pix_fmt rgba -s 1280x720 -r 60 -i - -c:v libx264rgb -crf 0 out/src_typing.mkv
-```
-```bash
-tools/render.sh typing cuda typing_cuda_50
+bin/crt_render . --size 1280x720 --fps 60 --vector lissajous --frames 480 --decay 40,120,70 --set scan=0,tracking=0,flicker=0,halation=0.55 | ffmpeg -f rawvideo -pix_fmt rgba -s 1280x720 -r 60 -i - -pix_fmt yuv420p lissajous.mp4
 ```
 
 ## Dials
 
 `--decay r,g,b` and `--rise` are the phosphor's time constants in milliseconds
-(one value sets all three channels). They are example values for looking at,
-not calibrated CRT physics. `--set name=value,...` reaches every glass dial:
-`curv scan scan_step glow glow_px bloom vign specular glare tracking track_rest
-track_sweep band_h flicker aberr k1 k2`. `--tiles "x,y,w,h;x,y,w,h"` gives each
-rectangle its own surface; the rest of the frame passes through.
+(one value sets all three). `--burn rise,decay` sets the afterglow's. They are
+values for the eye, not measured from a real tube.
+
+`--set name=value,...` reaches the rest: `curv scan scan_step glow glow_px bloom
+vign specular glare tracking track_rest track_sweep band_h flicker aberr k1 k2`
+for the glass, and for the second pass `halation afterglow beam mask
+degauss_at`. `--tiles "x,y,w,h;x,y,w,h"` gives each rectangle its own phosphor;
+the rest of the frame passes through.
+
+## Where it runs
+
+Linux with an NVIDIA driver: built and measured here. Windows with an NVIDIA
+driver: the kernels are portable, the EGL and POSIX code around them is not yet.
+Not WSL (no CUDA/OpenGL texture sharing there), not macOS, not AMD or Intel
+graphics. The `glsl` path is the one that runs anywhere.
 
 ## Layout
 
 ```
-phosphor_params.h     the two parameter structs every path shares
-kernels/phosphor.cu   the CUDA kernels: phosphor update, glass, passthrough
-shaders/              the matched GLSL: update.frag, optics.frag, probe.frag
-src/cpu_ref.hpp       the CPU reference the kernel is judged against
-src/cudart.hpp        NVRTC + driver API, no toolkit
-src/glrt.hpp          headless EGL + OpenGL helpers
-src/pipelines.hpp     the three paths behind one shape
-src/probe.cpp         Stage 0: what the box can do
-src/stage1_test.cpp   Stage 1: the six deterministic tests
-src/stage2_bench.cpp  Stage 2: the benchmark
-src/crt_render.cpp    frames in, CRT frames out
-tools/fixture.py      deterministic terminal footage
-tools/summarize.py    results.csv as the tables decision.md quotes
-tools/build_brief.py  the local review page (machine-specific paths; not for a public push)
+phosphor_params.h      the parameter structs every path shares
+phosphor_half.h        half-precision conversion, shared by kernels and CPU reference
+kernels/phosphor.cu    the STATE: phosphor update kernels, held bit-exact to the CPU
+kernels/glass.cu       drawn FROM the state: glass, halation, vector mode (fast math)
+shaders/               the matched GLSL: update.frag, optics.frag, probe.frag
+baseline/              the shipped omarchy-crt glass shader, pinned
+src/cpu_ref.hpp        the CPU reference the kernels are judged against
+src/cudart.hpp         NVRTC + driver API, no toolkit
+src/glrt.hpp           headless EGL + OpenGL helpers
+src/pipelines.hpp      every path behind one shape
+src/probe.cpp  src/stage1_test.cpp  src/stage2_bench.cpp  src/crt_render.cpp
+tools/                 fixtures, demo, benchmark runner, mutation check, summaries
+reviews/               an independent review of the first pass
 audit.md  decision.md  results.csv
 ```
+
+## Licence
+
+MIT. The baseline shader is from omarchy-crt, same author, same licence.

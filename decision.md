@@ -16,7 +16,82 @@ visible change (`out/typing_existing.mp4` beside `out/typing_cuda_50.mp4`). But
 CUDA does not earn its place on the desktop. It ties the shader on speed and
 costs 16 W more on this laptop while a trail is live.
 
-## The evidence
+## What Parker chose, and the second pass
+
+Parker read the verdict above and chose otherwise, the same day, in his notes on
+the review page: "go for performance! more power is fine. SPEED! <3 and cool
+factor <3". So the work that follows stays in CUDA and optimises for speed and
+look. The first-pass evidence below is unchanged and still stands; its
+recommendation is recorded as overruled on taste, not on a number.
+
+Second pass, measured the same way (p95 GPU time, 600 frames, full clock):
+
+| Size | Shipped glass | Shader phosphor | CUDA, first pass | CUDA v2, same picture | CUDA v2, all effects |
+|---|---|---|---|---|---|
+| 960 x 540 | 0.027 ms | 0.101 ms | 0.093 ms | **0.056 ms** | 0.078 ms |
+| 1920 x 1080 | 0.096 ms | 0.367 ms | 0.350 ms | **0.203 ms** | 0.296 ms |
+| 3840 x 2160 | 0.414 ms | 1.419 ms | 1.501 ms | **0.953 ms** | 1.370 ms |
+
+- **v2 with the same picture is 45% faster than the shader at 1080p** and 42%
+  faster than the first pass. Its output differs from the first pass's by at most
+  1 step in 255 (`out/glsl_vs_cuda_image.csv`, pair `cuda_v1_vs_v2_plain`).
+- Both v2 rows meet the 1.0 ms gate at 4K (+0.54 and +0.96 over the shipped glass),
+  which neither first-pass path did.
+- Where the speed came from: the state is stored at half precision (the update and
+  every read of it halve their memory traffic); the input's sRGB decode is done by
+  the texture unit; the glass kernels are compiled with fast math and skip the rim's
+  arithmetic for pixels deep inside the glass. Half precision alone gave 20%; an A/B
+  of the glass kernel with one part removed at a time found the rest.
+- "All effects" adds a halation glow (three small kernels on a 1/8-size image), an
+  afterglow ghost (a slow second light term in the state's fourth channel), bright
+  strokes that swell, and a degauss at switch-on. There is no matched shader for
+  these; the comparison question was settled in the first pass.
+- Power is as before: 1545 MHz and 38 W for as long as kernels run
+  (`out/clock_samples_v2.csv`). With the afterglow on, a tile stays active for about
+  3 s after a change (0.43 s in the first pass), by design.
+- One honest comparison this does not make: a shader storing half precision timed
+  0.173 ms at 1080p in the first pass, with its idle behaviour unproven. A shader
+  given the same care would probably still be close to v2.
+
+Correctness for v2 (`bin/stage1_test`, test 7): the half-precision kernel equals its
+CPU reference bit for bit (0 of 4,423,680 stored values differ); every one of the
+65,536 8-bit value-to-value changes settles and goes idle at 60, 144 and 165 Hz,
+including with a slow 180 ms fade, which is the case where a half-precision state
+can stall one rounding step short forever. 34 checks pass and `tools/mutate.sh`
+catches 7 of 7 broken kernels.
+
+### The independent review
+
+One review round by a second agent (`reviews/REVIEW-2026-11-15-astra.md`) found six
+problems in the first pass. Each was confirmed against the code, then fixed:
+
+| Finding | Fix |
+|---|---|
+| The hide/show test fed a 640-wide frame to a 1080p tile: an out-of-bounds read on CPU and GPU that passed by luck | The test now uses a frame the tile's size |
+| New surfaces read uninitialised state; a NaN would persist | Surfaces are cleared, and a weight of 1 adopts the frame without reading the old state (tested by poisoning a surface with NaN) |
+| A failure after mapping left GL textures mapped | `CudaPath::abandon()` unmaps before the frame is passed through |
+| Concurrent same-value writes to the activity flag are a data race | One atomic per block: threads raise a shared-memory flag, one thread ORs it in |
+| "Owes no frames" ignored the animated glass | `glass_next_wake()` reports when the band, flicker or degauss next needs a frame |
+| Timing labels claimed more than they measured | See the corrected wording under point 3 below |
+
+Also from the review: the CUDA device is now chosen as the one that owns the
+OpenGL context, not device 0. Not done: damage-driven sparse updates, asynchronous
+activity readback, a footprint-filtered aperture mask.
+
+### Where it can run, and whether it is snappy in a window
+
+- **Linux and Windows with an NVIDIA driver** are realistic. Built and measured on
+  Linux only. The kernels are portable; the EGL and POSIX hosting is not yet.
+  Not WSL (no CUDA/OpenGL interop there), not macOS, not AMD or Intel.
+- **As a filter over arbitrary windows it needs one integration per compositor.**
+  That is the non-portable part. As a video tool, or inside one's own app, it
+  needs none.
+- **Snappy:** a v2 frame takes 0.60 ms end to end at 1080p (all effects), against
+  6.9 ms available at 144 Hz, and a new letter reaches full brightness in the frame
+  that draws it. Input-to-display latency inside a real compositor has not been
+  measured, and that is the next proof.
+
+## The evidence (first pass)
 
 ### 1. Correctness: passes
 
@@ -52,8 +127,11 @@ frames each. "Added" is the path minus the shipped glass shader.
 Kernel time and shader time are within 4% of each other at 540p and 1080p, and
 GLSL is 7% faster at 4K. End to end (idle GPU to a finished, presented frame,
 p50, full clock, 1080p): shipped glass 0.17 ms, GLSL 0.47 ms, CUDA 0.67 ms.
-CUDA's extra 0.2 ms is the hand-off with OpenGL: 0.12 ms to map the textures at
-every size, more to unmap (`out/cuda_breakdown.csv`).
+CUDA's extra 0.2 ms is the hand-off with OpenGL (`out/cuda_breakdown.csv`): about
+0.12 ms at every size to begin a frame (map both textures, create the texture and
+surface objects, wait), more to end it. "End to end" here stops at a finished
+frame copied to an offscreen stand-in target. It is not display presentation and
+not input latency.
 
 What CUDA gave that the shader does not: the state is updated in place (32 MB
 at 1080p against GLSL's 63 MB for two ping-pong textures), and the "does this

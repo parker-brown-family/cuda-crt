@@ -57,13 +57,13 @@ def cost(pacing="back_to_back"):
 def handoff():
     rows = list(csv.DictReader(open(os.path.join(HERE, "out", "cuda_breakdown.csv"))))
     W, left, rowh = 760, 150, 34
-    peak = max(float(r["map_ms_p50"]) + float(r["kernels_synced_ms_p50"]) + float(r["unmap_present_ms_p50"]) for r in rows)
+    peak = max(float(r["begin_ms_p50"]) + float(r["kernels_synced_ms_p50"]) + float(r["end_and_copy_ms_p50"]) for r in rows)
     scale = (W - left - 70) / peak
     H = 30 + len(rows) * (rowh + 14) + 44
     o = ['<svg viewBox="0 0 %d %d" role="img" aria-label="Where a CUDA frame&#39;s wall time goes at three sizes: taking the textures from OpenGL, running the kernels, and handing them back">' % (W, H)]
     y = 26
     for r in rows:
-        parts = [(float(r["map_ms_p50"]), "unk"), (float(r["kernels_synced_ms_p50"]), "mine"), (float(r["unmap_present_ms_p50"]), "unk")]
+        parts = [(float(r["begin_ms_p50"]), "unk"), (float(r["kernels_synced_ms_p50"]), "mine"), (float(r["end_and_copy_ms_p50"]), "unk")]
         o.append('<text class="ink" x="8" y="%d" font-size="15" font-weight="700">%s × %s</text>' % (y + 22, r["width"], r["height"]))
         x = left
         for v, cls in parts:
@@ -135,6 +135,31 @@ def low_clock():
                            "after_20s_watts": med([w for _, w in ck[p][21:41]]), "first_15s_watts": med([w for _, w in ck[p][3:16]])} for p in tr}, indent=1)
 
 
+def speed2():
+    """Second pass: one size (1080p), five bars, so the change reads at a glance."""
+    s = summary()
+    blk = [e for e in s["sizes"] if e["size"] == "1920x1080"][0]["pacing"]["back_to_back"]
+    rows = [("existing", "struct", "shipped glass", "no memory"), ("glsl_full", "ready", "shader phosphor", "fade alone"),
+            ("cuda_full", "unk", "CUDA, first pass", "fade alone"), ("cuda_v2_plain", "mine", "CUDA, second pass", "the same picture"),
+            ("cuda_v2", "mine", "CUDA, second pass", "plus glow, afterglow, swell")]
+    W, left, rowh = 760, 300, 34
+    peak = max(blk[p]["gpu_p95"] for p, _, _, _ in rows)
+    scale = (W - left - 90) / peak
+    H = 20 + len(rows) * (rowh + 8) + 26
+    o = ['<svg viewBox="0 0 %d %d" role="img" aria-label="GPU time per frame at 1080p for five renderers: the shipped glass, the shader phosphor, CUDA first pass, and CUDA second pass with and without its extra effects">' % (W, H)]
+    y = 14
+    for p, cls, name, what in rows:
+        v = blk[p]["gpu_p95"]
+        o.append('<text class="ink" x="8" y="%d" font-size="14" font-weight="700">%s</text>' % (y + 15, name))
+        o.append('<text class="ink2" x="8" y="%d" font-size="11">%s</text>' % (y + 30, what))
+        o.append('<rect class="%s" x="%d" y="%d" width="%.1f" height="%d" rx="4"/>' % (cls, left, y + 3, max(v * scale, 2), rowh - 6))
+        o.append('<text class="ink" x="%.1f" y="%d" font-size="13">%.2f ms</text>' % (left + v * scale + 8, y + 23, v))
+        y += rowh + 8
+    o.append('<text class="ink2" x="%d" y="%d" font-size="11">GPU time in the pass per frame, 1920 × 1080, 95th percentile of 600 frames, GPU at full clock.</text>' % (8, H - 6))
+    o.append("</svg>")
+    return "\n".join(o)
+
+
 def img(path):
     with open(path, "rb") as f:
         return "data:image/jpeg;base64," + base64.b64encode(f.read()).decode()
@@ -142,4 +167,4 @@ def img(path):
 
 if __name__ == "__main__":
     what = sys.argv[1]
-    print({"cost": cost, "handoff": handoff, "clock": clock, "low_clock": low_clock}[what]() if what != "img" else img(sys.argv[2]))
+    print({"cost": cost, "handoff": handoff, "clock": clock, "low_clock": low_clock, "speed2": speed2}[what]() if what != "img" else img(sys.argv[2]))

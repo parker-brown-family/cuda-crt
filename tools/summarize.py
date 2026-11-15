@@ -36,7 +36,7 @@ def main():
             if not base:
                 continue
             block = {}
-            for path in ("existing", "glsl_update", "glsl_full_noprobe", "glsl_full", "glsl_full_16f", "cuda_update", "cuda_full"):
+            for path in ("existing", "glsl_update", "glsl_full_noprobe", "glsl_full", "glsl_full_16f", "cuda_update", "cuda_full", "cuda_v2_plain", "cuda_v2"):
                 r = rows.get((path, w, pacing))
                 if not r:
                     continue

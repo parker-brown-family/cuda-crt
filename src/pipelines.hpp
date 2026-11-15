@@ -19,6 +19,10 @@ struct Look {
           glow_px = 2.0f, bloom = 0.35f, vign = 0.32f, specular = 0.50f, glare = 0.30f, tracking = 0.60f,
           track_rest = 9.0f, track_sweep = 8.0f, band_h = 264.0f, flicker = 0.35f;
     float accent[3] = {0.133f, 0.773f, 0.369f}, glare_tint[3] = {0.72f, 1.00f, 0.78f};
+    // version 2 extras (CUDA only)
+    BurnTuning burn;
+    float halation = 0.30f, glow_knee = 0.02f, mask = 0.0f, beam = 0.5f;
+    float degauss_at = -1.0f;  // seconds into the run at which the tube is "switched on"; < 0 = never
 };
 
 inline float hash1(float n) { float v = sinf(n * 127.1f) * 43758.5453f; return v - floorf(v); }
@@ -41,8 +45,37 @@ inline float band_center(const Look &k, float t, float tile_h) {
     if (tc > sweep) return -1.0e9f;
     return -k.band_h + (tc / sweep) * (tile_h + k.band_h * 2.0f);
 }
-inline OpticsParams make_optics(const Look &k, float t, int tile_h) {
+// extras = false gives the version 1 picture, which is what the matched shader draws
+// Seconds until the GLASS next needs a frame for its own reasons (the tracking
+// band, a flicker burst), 0 = it is moving now. The surface's `active` flag
+// covers the phosphor only; a host that wants to sleep must honour both.
+inline float glass_next_wake(const Look &k, float t) {
+    float wake = 1.0e9f;
+    if (k.tracking >= 0.001f) {
+        float sweep = k.track_sweep * (1.40f - 0.50f * k.tracking), period = sweep + k.track_rest;
+        float tc = fmodf(t, period);
+        wake = tc <= sweep ? 0.0f : period - tc;
+    }
+    if (k.flicker >= 0.001f) {
+        float win = floorf(t / 13.0f), start = win * 13.0f + 2.0f + hash1(win) * 8.0f;
+        if (t < start) wake = std::min(wake, start - t);
+        else if (t <= start + 0.45f) wake = 0.0f;
+        else wake = std::min(wake, (win + 1.0f) * 13.0f + 2.0f + hash1(win + 1.0f) * 8.0f - t);
+    }
+    if (k.degauss_at >= 0.0f && t < k.degauss_at + 1.6f) wake = t >= k.degauss_at ? 0.0f : std::min(wake, k.degauss_at - t);
+    return wake;
+}
+
+inline OpticsParams make_optics(const Look &k, float t, int tile_h, bool extras = false) {
     OpticsParams o;
+    o.burn_gain = extras ? k.burn.gain : 0.0f;
+    o.halation = extras ? k.halation : 0.0f;
+    o.mask = extras ? k.mask : 0.0f;
+    o.beam = extras ? k.beam : 0.0f;
+    float since = t - k.degauss_at;
+    bool dg = extras && k.degauss_at >= 0.0f && since >= 0.0f && since < 1.6f;
+    o.degauss = dg ? expf(-since / 0.32f) : 0.0f;
+    o.degauss_phase = dg ? since * 42.0f : 0.0f;
     o.curv = k.curv; o.k1 = k.k1; o.k2 = k.k2; o.aberr = k.aberr; o.scan = k.scan; o.scan_step = k.scan_step;
     o.glow = k.glow; o.glow_px = k.glow_px; o.bloom = k.bloom; o.vign = k.vign; o.specular = k.specular;
     o.glare = k.glare; o.tracking = k.tracking; o.band_h = k.band_h;
@@ -64,7 +97,11 @@ struct GlslSurf {
     // can stall one step from a bright target, so idle is not proven for it.
     void create(int w_, int h_, GLenum format = GL_RGBA32F) {
         w = w_; h = h_; fresh = true; cur = 0; bpp = format == GL_RGBA16F ? 8 : 16;
-        for (int i = 0; i < 2; i++) { tex[i] = gl_tex(format, w, h, GL_LINEAR); fbo[i] = gl_fbo(tex[i]); }
+        for (int i = 0; i < 2; i++) {
+            tex[i] = gl_tex(format, w, h, GL_LINEAR);
+            glClearTexImage(tex[i], 0, GL_RGBA, GL_FLOAT, nullptr);  // storage starts undefined; make it black
+            fbo[i] = gl_fbo(tex[i]);
+        }
     }
     void destroy() { glDeleteFramebuffers(2, fbo); glDeleteTextures(2, tex); tex[0] = tex[1] = 0; }
     size_t bytes() const { return (size_t)w * h * bpp * 2; }
@@ -210,16 +247,25 @@ struct Existing {
 };
 
 // ---- CUDA path --------------------------------------------------------------
-struct CudaSurf {
-    int w = 0, h = 0;
+// The CUDA device that owns the current OpenGL context. On a machine with two
+// NVIDIA GPUs, device 0 is not necessarily the one drawing; sharing a texture
+// with the wrong one fails. Call with the GL context current. -1 = could not tell.
+inline int cuda_device_for_gl() {
+    if (cuInit(0) != CUDA_SUCCESS) return -1;
+    unsigned int n = 0;
+    CUdevice devs[4];
+    if (cuGLGetDevices(&n, devs, 4, CU_GL_DEVICE_LIST_ALL) != CUDA_SUCCESS || n == 0) return -1;
+    return (int)devs[0];
+}
+
+// One CUDA array with a surface (to write) and a bilinear texture (to read).
+struct CuImage {
     CUarray arr = nullptr;
     CUsurfObject surf = 0;
-    CUtexObject tex = 0;  // the same array, bilinear, for the glass to read
-    bool fresh = true;
-    void create(int w_, int h_) {
-        w = w_; h = h_; fresh = true;
+    CUtexObject tex = 0;
+    void create(int w, int h, CUarray_format fmt) {
         CUDA_ARRAY3D_DESCRIPTOR d{};
-        d.Width = w; d.Height = h; d.Depth = 0; d.Format = CU_AD_FORMAT_FLOAT; d.NumChannels = 4;
+        d.Width = w; d.Height = h; d.Depth = 0; d.Format = fmt; d.NumChannels = 4;
         d.Flags = CUDA_ARRAY3D_SURFACE_LDST;
         CU(cuArray3DCreate(&arr, &d));
         CUDA_RESOURCE_DESC rd{};
@@ -230,13 +276,46 @@ struct CudaSurf {
         td.filterMode = CU_TR_FILTER_MODE_LINEAR;
         CU(cuTexObjectCreate(&tex, &rd, &td, nullptr));
     }
+    void zero(int w, int h, int bytes_per_px) {
+        std::vector<uint8_t> z((size_t)w * h * bytes_per_px, 0);
+        CUDA_MEMCPY2D c{};
+        c.srcMemoryType = CU_MEMORYTYPE_HOST; c.srcHost = z.data(); c.srcPitch = (size_t)w * bytes_per_px;
+        c.dstMemoryType = CU_MEMORYTYPE_ARRAY; c.dstArray = arr;
+        c.WidthInBytes = (size_t)w * bytes_per_px; c.Height = h;
+        CU(cuMemcpy2D(&c));
+    }
     void destroy() {
         if (tex) cuTexObjectDestroy(tex);
         if (surf) cuSurfObjectDestroy(surf);
         if (arr) cuArrayDestroy(arr);
         tex = 0; surf = 0; arr = nullptr;
     }
-    size_t bytes() const { return (size_t)w * h * 16; }
+};
+
+// One tile's phosphor surface. v2 = half-precision state with the burn term in
+// alpha, plus two 1/8-size images for the halation.
+struct CudaSurf {
+    int w = 0, h = 0, gw = 0, gh = 0;
+    bool v2 = false, fresh = true;
+    CuImage state, glow[2];
+    CUsurfObject surf = 0;  // aliases of state, for the callers
+    CUtexObject tex = 0;
+    void create(int w_, int h_, bool v2_ = false) {
+        w = w_; h = h_; v2 = v2_; fresh = true;
+        state.create(w, h, v2 ? CU_AD_FORMAT_HALF : CU_AD_FORMAT_FLOAT);
+        surf = state.surf; tex = state.tex;
+        state.zero(w, h, v2 ? 8 : 16);  // an array starts undefined; no light, no burn, until the first frame
+        if (v2) {
+            gw = (w + 7) / 8; gh = (h + 7) / 8;
+            for (auto &g : glow) { g.create(gw, gh, CU_AD_FORMAT_FLOAT); g.zero(gw, gh, 16); }
+        }
+    }
+    void destroy() {
+        state.destroy();
+        for (auto &g : glow) g.destroy();
+        surf = 0; tex = 0;
+    }
+    size_t bytes() const { return (size_t)w * h * (v2 ? 8 : 16) + (size_t)gw * gh * 32; }
 };
 
 // A GL texture registered with CUDA once, and mapped per frame.
@@ -248,7 +327,8 @@ struct Shared {
 
 struct CudaPath {
     Cuda *cu = nullptr;
-    CUfunction k_update{}, k_optics{}, k_pass{};
+    CUfunction k_update{}, k_optics{}, k_pass{}, k_update_v2{}, k_down{}, k_blur{}, k_beam{};
+    CUtexObject frame_lin = 0;  // the same frame, decoded from sRGB by the texture unit
     CUdeviceptr d_active = 0;
     CUtexObject frame_tex = 0;
     CUsurfObject out_surf = 0;
@@ -259,6 +339,7 @@ struct CudaPath {
     void init(Cuda &c) {
         cu = &c;
         k_update = c.fn("phosphor_update_tex"); k_optics = c.fn("crt_optics_tex"); k_pass = c.fn("passthrough_tex");
+        k_update_v2 = c.fn("phosphor_update_v2_tex"); k_down = c.fn("glow_down8"); k_blur = c.fn("glow_blur"); k_beam = c.fn("beam_deposit");
         CU(cuMemAlloc(&d_active, 4));
     }
     // Map the compositor's frame (and, when the glass runs here too, the output).
@@ -274,6 +355,8 @@ struct CudaPath {
         td.addressMode[0] = td.addressMode[1] = td.addressMode[2] = CU_TR_ADDRESS_MODE_CLAMP;
         td.filterMode = CU_TR_FILTER_MODE_POINT;
         CU(cuTexObjectCreate(&frame_tex, &rd, &td, nullptr));
+        td.flags = CU_TRSF_SRGB;
+        CU(cuTexObjectCreate(&frame_lin, &rd, &td, nullptr));
         if (out) {
             CU(cuGraphicsSubResourceGetMappedArray(&a, out->res, 0, 0));
             rd.res.array.hArray = a;
@@ -287,9 +370,33 @@ struct CudaPath {
         launch2d(k_update, s.w, s.h, args, bx, by);
         s.fresh = false;
     }
+    void update_v2(CudaSurf &s, int ox, int oy, const PhosphorStepV2 &p) {
+        PhosphorStepV2 pp = p;
+        void *args[] = {&frame_lin, &ox, &oy, &s.surf, &s.w, &s.h, &pp, &d_active};
+        launch2d(k_update_v2, s.w, s.h, args, bx, by);
+        s.fresh = false;
+    }
+    // Vector mode: deposit this frame's beam strokes into a v2 surface. d_segs holds nseg x 4 floats.
+    void beam(CudaSurf &s, CUdeviceptr d_segs, int nseg, float sigma, float energy, const float rgb[3]) {
+        float r = rgb[0], g = rgb[1], b = rgb[2];
+        void *args[] = {&s.surf, &s.w, &s.h, &d_segs, &nseg, &sigma, &energy, &r, &g, &b};
+        launch2d(k_beam, s.w, s.h, args, bx, by);
+    }
+    // Rebuild the tile's halation image from its state: down 8x, blur across, blur down.
+    void glow(CudaSurf &s, float knee) {
+        int one = 1, zero = 0;
+        void *a0[] = {&s.tex, &s.glow[0].surf, &s.gw, &s.gh, &knee};
+        launch2d(k_down, s.gw, s.gh, a0, 16, 16);
+        void *a1[] = {&s.glow[0].tex, &s.glow[1].surf, &s.gw, &s.gh, &one, &zero};
+        launch2d(k_blur, s.gw, s.gh, a1, 16, 16);
+        void *a2[] = {&s.glow[1].tex, &s.glow[0].surf, &s.gw, &s.gh, &zero, &one};
+        launch2d(k_blur, s.gw, s.gh, a2, 16, 16);
+    }
     void optics(CudaSurf &s, int ox, int oy, const OpticsParams &k) {
         OpticsParams kk = k;
-        void *args[] = {&s.tex, &out_surf, &ox, &oy, &s.w, &s.h, &kk};
+        CUtexObject glow_tex = s.v2 ? s.glow[0].tex : 0;
+        if (!s.v2) kk.burn_gain = kk.halation = 0.0f;  // a version 1 surface has neither
+        void *args[] = {&s.tex, &out_surf, &ox, &oy, &s.w, &s.h, &kk, &glow_tex};
         launch2d(k_optics, s.w, s.h, args, bx, by);
     }
     void passthrough(int ox, int oy, int w, int h) {
@@ -302,8 +409,18 @@ struct CudaPath {
         CU(cuMemcpyDtoH(&a, d_active, 4));
         return a != 0;
     }
+    // After a failure mid-frame: let go of everything without throwing again, so
+    // OpenGL is never left drawing into textures CUDA still has mapped.
+    void abandon() {
+        if (frame_tex) { cuTexObjectDestroy(frame_tex); frame_tex = 0; }
+        if (frame_lin) { cuTexObjectDestroy(frame_lin); frame_lin = 0; }
+        if (out_surf) { cuSurfObjectDestroy(out_surf); out_surf = 0; }
+        if (n_mapped) cuGraphicsUnmapResources(n_mapped, mapped, 0);
+        n_mapped = 0;
+    }
     void end() {
         if (frame_tex) { cuTexObjectDestroy(frame_tex); frame_tex = 0; }
+        if (frame_lin) { cuTexObjectDestroy(frame_lin); frame_lin = 0; }
         if (out_surf) { cuSurfObjectDestroy(out_surf); out_surf = 0; }
         CU(cuGraphicsUnmapResources(n_mapped, mapped, 0));
         n_mapped = 0;

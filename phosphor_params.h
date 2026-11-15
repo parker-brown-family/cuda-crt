@@ -13,6 +13,19 @@ typedef struct PhosphorStep {
     float eps;         /* linear light: closer than this snaps to the target */
 } PhosphorStep;
 
+/* Version 2 of the step: the state is HALF precision (rgb = the phosphor,
+ * a = a slow "burn" term that charges under light that stays and drains slowly
+ * once it goes, drawn as a faint ghost). Half precision is where the speed is:
+ * the update is bound by memory traffic, and this halves it. */
+typedef struct PhosphorStepV2 {
+    float a_rise;
+    float a_decay[3];
+    float eps;          /* linear light: closer than this snaps to the target */
+    float a_burn_rise;  /* how fast the burn charges under steady light       */
+    float a_burn_decay; /* how fast it drains                                 */
+    float eps_burn;     /* burn closer than this to its target snaps          */
+} PhosphorStepV2;
+
 /* The glass. Dial names follow crt/crt-glass.frag; values are display-referred
  * exactly as they are there. Per-frame scalars the clock drives (flicker, the
  * tracking band's position) are computed on the host so the kernel and the
@@ -35,6 +48,14 @@ typedef struct OpticsParams {
     float flicker_mul;   /* 1.0 except inside a burst                       */
     float phosphor[3];   /* theme accent                                    */
     float glare_tint[3];
+    /* CUDA-only extras; 0 switches each off, and with all three off the kernel
+     * draws exactly what the matched shader draws. */
+    float burn_gain;     /* strength of the burn ghost                      */
+    float halation;      /* wide glow: light scattered inside the glass     */
+    float mask;          /* aperture grille depth, 0..1                     */
+    float beam;          /* bright strokes swell: spill weighted by light   */
+    float degauss;       /* 0 = none; 1 fading to 0 over a second at power-on */
+    float degauss_phase; /* radians, advances with time                     */
 } OpticsParams;
 
 #endif

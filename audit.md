@@ -3,7 +3,8 @@
 Written 2026-11-15 for the CUDA virtual phosphor surface experiment. Everything
 here was read from the repository at `bcfd334` (main, in step with origin) or
 measured on this machine by `bin/probe`. Nothing under `crt/`, `native/`, the
-installed plugin or the Hyprland session was changed.
+installed plugin or the Hyprland session was changed. (Paths such as `crt/` and
+`native/` are in the omarchy-crt repository; this lab has since moved out of it.)
 
 ## The finding that shapes the rest
 
@@ -117,5 +118,9 @@ surface.destroy()                    hidden or closed
   current frame, so there is no ghost and no flash. Reprojection was not built:
   a resize reflows a terminal's text, so the old trail would be in the wrong
   place anyway.
+- **Two clocks, not one** (added after the review): `active` covers the phosphor
+  only. The glass has its own animation (tracking band, flicker, degauss), and
+  `glass_next_wake()` says when it next needs a frame. A host that wants to sleep
+  honours both.
 - **Failure**: any CUDA error is caught by the caller and the frame goes through
   untouched (`bin/crt_render` does this and says so once on stderr).

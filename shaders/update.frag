@@ -20,8 +20,9 @@ void main() {
     vec3 target = srgb_to_linear(texelFetch(u_frame, p + u_origin, 0).rgb);
     vec3 prev   = texelFetch(u_prev, p, 0).rgb;
     vec3 a      = mix(u_a_decay, vec3(u_a_rise), greaterThan(target, prev));
-    vec3 next   = prev + a * (target - prev);
-    bvec3 settled = lessThan(abs(target - next), vec3(u_eps));
+    // a weight of 1 adopts the frame without doing arithmetic on the old state
+    vec3 next   = mix(prev + a * (target - prev), target, greaterThanEqual(a, vec3(1.0)));
+    bvec3 settled = not(greaterThanEqual(abs(target - next), vec3(u_eps)));  // also true for NaN
     next = mix(next, target, settled);
     // alpha carries "this pixel is still moving", for the idle probe
     o = vec4(next, all(settled) ? 0.0 : 1.0);

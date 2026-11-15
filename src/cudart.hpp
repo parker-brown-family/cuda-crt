@@ -27,13 +27,16 @@ inline std::string cu_err(CUresult r) {
 struct Cuda {
     CUdevice dev{};
     CUcontext ctx{};
-    CUmodule mod{};
+    std::vector<CUmodule> mods;
     std::string device_name, nvrtc_version, driver_version;
     int sm_major = 0, sm_minor = 0;
 
-    void init() {
+    // gl_device: a CUDA device handle that owns the current OpenGL context (see
+    // cuda_device_for_gl in pipelines.hpp), or -1 to take device 0.
+    void init(int gl_device = -1) {
         CU(cuInit(0));
-        CU(cuDeviceGet(&dev, 0));
+        if (gl_device >= 0) dev = (CUdevice)gl_device;
+        else CU(cuDeviceGet(&dev, 0));
         char name[128];
         CU(cuDeviceGetName(name, sizeof name, dev));
         device_name = name;
@@ -46,8 +49,10 @@ struct Cuda {
         CU(cuCtxSetCurrent(ctx));
     }
 
-    // Compile `path` (with `incdir` on the include path) and load it.
-    void load(const std::string &path, const std::string &incdir) {
+    // Compile `path` (with `incdir` on the include path) and load it. fast = fast
+    // math, for kernels whose output is a picture; without it there are no fused
+    // multiply-adds, so a kernel rounds exactly as its CPU reference does.
+    void load(const std::string &path, const std::string &incdir, bool fast = false) {
         std::ifstream f(path);
         if (!f) throw std::runtime_error("cannot read " + path);
         std::stringstream ss;
@@ -61,8 +66,8 @@ struct Cuda {
             throw std::runtime_error("nvrtcCreateProgram failed");
         std::string arch = "--gpu-architecture=compute_" + std::to_string(sm_major) + std::to_string(sm_minor);
         std::string inc = "-I" + incdir;
-        const char *opts[] = {arch.c_str(), inc.c_str(), "--std=c++17"};
-        nvrtcResult r = nvrtcCompileProgram(prog, 3, opts);
+        const char *opts[] = {arch.c_str(), inc.c_str(), "--std=c++17", fast ? "--use_fast_math" : "--fmad=false"};
+        nvrtcResult r = nvrtcCompileProgram(prog, 4, opts);
         size_t logn = 0;
         nvrtcGetProgramLogSize(prog, &logn);
         std::string log(logn, '\0');
@@ -74,13 +79,21 @@ struct Cuda {
         std::string ptx(n, '\0');
         nvrtcGetPTX(prog, ptx.data());
         nvrtcDestroyProgram(&prog);
+        CUmodule mod;
         CU(cuModuleLoadDataEx(&mod, ptx.c_str(), 0, nullptr, nullptr));
+        mods.push_back(mod);
+    }
+    // Both kernel files: the state (exact) and the glass (fast math).
+    void load_all(const std::string &root) {
+        load(root + "/kernels/phosphor.cu", root);
+        load(root + "/kernels/glass.cu", root, true);
     }
 
     CUfunction fn(const char *name) {
         CUfunction f;
-        CU(cuModuleGetFunction(&f, mod, name));
-        return f;
+        for (CUmodule m : mods)
+            if (cuModuleGetFunction(&f, m, name) == CUDA_SUCCESS) return f;
+        throw std::runtime_error(std::string("no kernel named ") + name);
     }
 
     size_t free_bytes() {

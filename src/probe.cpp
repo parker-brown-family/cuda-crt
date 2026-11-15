@@ -29,7 +29,7 @@ int main(int argc, char **argv) {
         printf("cuda_device: %s\n", cu.device_name.c_str());
         printf("cuda_compute_capability: %d.%d\n", cu.sm_major, cu.sm_minor);
         printf("cuda_driver_api: %s\n", cu.driver_version.c_str());
-        cu.load(root + "/kernels/phosphor.cu", root);
+        cu.load_all(root);
         printf("nvrtc: %s\n", cu.nvrtc_version.c_str());
         printf("kernel_compile: ok (phosphor_update_buf, phosphor_update_tex, crt_optics_tex, passthrough_tex)\n");
         cu.fn("phosphor_update_buf"); cu.fn("phosphor_update_tex"); cu.fn("crt_optics_tex"); cu.fn("passthrough_tex");

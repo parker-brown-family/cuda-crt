@@ -281,17 +281,46 @@ static void test5() {
     }
     report("5", "resize resets: the new surface holds the current frame, no old trail", adopted, "policy: reset, not reprojection");
     report("5", "resize is deterministic: two runs, identical bits", same, same ? "identical" : "differs");
-    size_t before = cu.free_bytes();
-    for (int i = 0; i < 200; i++) {
-        Tile tile(1920, 1080);
-        f.upload();
-        tile.update(f.d, f.px.data(), 640, 0, 0, t, dt);
+    // Free VRAM is read for the whole card, and the desktop allocates on it too, so one
+    // reading can move by more than a surface for reasons that are not ours. A real leak
+    // (one surface per cycle, 6 GB) shows on every attempt; noise does not.
+    {
+        Frame big(1920, 1080);  // the tile's own size: a smaller frame here would be read past its end
+        big.noise(5);
+        big.upload();
+        const long long one = 1920LL * 1080 * 16;
+        long long leak = 0;
+        int attempts = 0;
+        do {
+            size_t before = cu.free_bytes();
+            for (int i = 0; i < 200; i++) {
+                Tile tile(1920, 1080);
+                tile.update(big.d, big.px.data(), 1920, 0, 0, t, dt);
+            }
+            leak = (long long)before - (long long)cu.free_bytes();
+            attempts++;
+        } while (llabs(leak) >= one && attempts < 3);
+        report("5", "hide/show 200 times at 1080p: no VRAM left behind", llabs(leak) < one,
+               fmt("free VRAM moved %.1f MB on a GPU shared with the desktop (attempt %d of 3); one leaked surface per cycle would be %.0f MB",
+                   leak / 1048576.0, attempts, 200 * one / 1048576.0));
     }
-    size_t after = cu.free_bytes();
-    long long leak = (long long)before - (long long)after;
-    const long long one = 1920LL * 1080 * 16;  // one surface; a leak would be 200 of these
-    report("5", "hide/show 200 times at 1080p: no VRAM left behind", llabs(leak) < one,
-           fmt("free VRAM moved %.1f MB on a GPU shared with the desktop; one leaked surface per cycle would be %.0f MB", leak / 1048576.0, 200 * one / 1048576.0));
+    // A new surface must not inherit whatever was in its memory: poison it with NaN first.
+    {
+        Tile poisoned(200, 150);
+        CU(cuMemsetD32(poisoned.d_state, 0x7fc00000u, (size_t)200 * 150 * 4));
+        for (float &v : poisoned.ref) v = NAN;
+        f.noise(9);
+        f.upload();
+        poisoned.update(f.d, f.px.data(), 640, 0, 0, t, dt);
+        auto s = poisoned.read();
+        bool clean = true;
+        for (size_t px = 0; px < s.size(); px += 4)
+            for (int c = 0; c < 3; c++) {
+                float want = cpu_srgb_to_linear(f.px[4 * ((px / 4 / 200) * 640 + (px / 4) % 200) + c] / 255.0f);
+                if (!(fabsf(s[px + c] - want) <= 1e-6f) || !(fabsf(poisoned.ref[px + c] - want) <= 1e-6f)) clean = false;
+            }
+        report("5", "a new surface filled with NaN adopts the frame cleanly", clean, clean ? "every value equals the frame after one update" : "garbage survived");
+    }
     // Backend failure: the caller must get the frame through untouched.
     Tile tile(640, 360);
     f.noise(3);
@@ -338,6 +367,158 @@ static void test6() {
     report("6", "CUDA's active flag equals the reference's on all 200 frames", ref_disagree == 0, fmt("%d disagreements", ref_disagree));
 }
 
+// ---- version 2: half-precision state and the burn term ----------------------
+static CUfunction k_update_v2;
+static CUdeviceptr d_lut = 0;  // sRGB byte -> linear, the same 256 numbers the reference uses
+struct Tile2 {
+    int w, h;
+    CUdeviceptr d_state = 0, d_active = 0;
+    std::vector<uint16_t> ref;
+    bool fresh = true;
+    Tile2(int w_, int h_) : w(w_), h(h_), ref((size_t)w_ * h_ * 4, 0) {
+        CU(cuMemAlloc(&d_state, ref.size() * 2));
+        CU(cuMemsetD16(d_state, 0, ref.size()));
+        CU(cuMemAlloc(&d_active, 4));
+    }
+    ~Tile2() { cuMemFree(d_state); cuMemFree(d_active); }
+    int update(Frame &f, const PhosphorTuning &t, const BurnTuning &b, double dt, int *ref_active = nullptr) {
+        PhosphorStepV2 p = make_step_v2(t, b, dt, fresh);
+        fresh = false;
+        int ra = cpu_phosphor_update_v2(f.px.data(), f.w, 0, 0, ref.data(), w, h, p);
+        if (ref_active) *ref_active = ra;
+        CU(cuMemsetD32(d_active, 0, 1));
+        int zero = 0;
+        void *args[] = {&f.d, &f.w, &zero, &zero, &d_state, &w, &h, &p, &d_active, &d_lut};
+        launch2d(k_update_v2, w, h, args);
+        int active = 0;
+        CU(cuMemcpyDtoH(&active, d_active, 4));
+        return active;
+    }
+    std::vector<uint16_t> read() {
+        std::vector<uint16_t> s(ref.size());
+        CU(cuMemcpyDtoH(s.data(), d_state, s.size() * 2));
+        return s;
+    }
+};
+
+static void test7() {
+    printf("7. version 2: half-precision state, burn term\n");
+    const int W = 256, H = 144;
+    // a. the kernel against the CPU reference, on the worst content: noise, changing
+    {
+        PhosphorTuning t;
+        BurnTuning b;
+        Frame f(W, H);
+        Tile2 tile(W, H);
+        size_t differ = 0, total = 0;
+        int worst_steps = 0, flag_disagree = 0;
+        for (int i = 0; i < 180; i++) {
+            if (i < 90) f.noise(i / 3); else f.clear(4, 6, 4);
+            f.upload();
+            int ra = 0, act = tile.update(f, t, b, 1.0 / 60, &ra);
+            flag_disagree += act != ra;
+            if (i % 6 == 5) {
+                auto s = tile.read();
+                for (size_t k = 0; k < s.size(); k++) {
+                    int d = abs((int)s[k] - (int)tile.ref[k]);
+                    differ += d != 0; worst_steps = std::max(worst_steps, d); total++;
+                }
+            }
+        }
+        report("7", "v2 kernel equals the CPU reference, bit for bit", differ == 0 && flag_disagree == 0,
+               fmt("%zu of %zu stored values differ (largest gap %d steps); active flag disagreed on %d frames", differ, total, worst_steps, flag_disagree));
+    }
+    // b. idle is reached from any picture to any picture, even with a slow fade at 144 Hz
+    for (int variant = 0; variant < 2; variant++) {
+        PhosphorTuning t;
+        BurnTuning b;
+        double hz = 60;
+        if (variant == 1) { t.tau_decay[0] = 0.060; t.tau_decay[1] = 0.180; t.tau_decay[2] = 0.090; hz = 144; }
+        Frame f(W, H);
+        Tile2 tile(W, H);
+        f.noise(11); f.upload();
+        for (int i = 0; i < 400; i++) tile.update(f, t, b, 1.0 / hz);
+        f.noise(12); f.upload();
+        int last_active = -1, n = (int)(12 * hz);
+        for (int i = 0; i < n; i++)
+            if (tile.update(f, t, b, 1.0 / hz)) last_active = i;
+        auto s = tile.read();
+        bool exact = true;
+        for (size_t px = 0; px < s.size(); px += 4)
+            for (int c = 0; c < 3; c++)
+                if (s[px + c] != ph_f2h(cpu_srgb_to_linear(f.px[px + c] / 255.0f))) exact = false;
+        report("7", variant ? "idle from noise to noise: 180 ms green fade at 144 Hz" : "idle from noise to noise: 50 ms fade at 60 Hz",
+               last_active >= 0 && last_active < n - (int)hz && exact,
+               fmt("still for good after %.0f ms; every colour value then equals the picture exactly", (last_active + 1) * 1000.0 / hz));
+    }
+    // b2. every 8-bit value to every other, slow fade, three refresh rates: none may stall
+    for (double hz : {60.0, 144.0, 165.0}) {
+        PhosphorTuning t;
+        t.tau_decay[0] = 0.060; t.tau_decay[1] = 0.180; t.tau_decay[2] = 0.090;
+        BurnTuning b;
+        Frame f(256, 256);
+        Tile2 tile(256, 256);
+        for (int y = 0; y < 256; y++)
+            for (int x = 0; x < 256; x++) { uint8_t *px = &f.px[4 * (y * 256 + x)]; px[0] = px[1] = px[2] = (uint8_t)x; }
+        f.upload();
+        for (int i = 0; i < (int)(6 * hz); i++) tile.update(f, t, b, 1.0 / hz);
+        for (int y = 0; y < 256; y++)
+            for (int x = 0; x < 256; x++) { uint8_t *px = &f.px[4 * (y * 256 + x)]; px[0] = px[1] = px[2] = (uint8_t)y; }
+        f.upload();
+        int last_active = -1, n = (int)(14 * hz);
+        for (int i = 0; i < n; i++)
+            if (tile.update(f, t, b, 1.0 / hz)) last_active = i;
+        auto s = tile.read();
+        size_t wrong = 0;
+        for (size_t px = 0; px < s.size(); px += 4)
+            for (int c = 0; c < 3; c++) wrong += s[px + c] != ph_f2h(cpu_srgb_to_linear(f.px[px + c] / 255.0f));
+        report("7", fmt("all 65,536 value-to-value changes settle at %.0f Hz", hz).c_str(), wrong == 0 && last_active < n - (int)hz,
+               fmt("%zu values off target; still for good after %.1f s", wrong, (last_active + 1) / hz));
+    }
+    // c. burn: a square that sat for 2 s leaves a charge that drains, then the tile goes idle
+    {
+        PhosphorTuning t;
+        BurnTuning b;
+        Frame f(W, H);
+        Tile2 tile(W, H);
+        float charged = 0, after_1s = 0;
+        int last_active = -1;
+        const size_t at = 4 * ((size_t)72 * W + 128) + 3;
+        for (int i = 0; i < 720; i++) {
+            f.clear();
+            if (i < 120) f.rect(100, 50, 60, 44, 255, 255, 255);
+            f.upload();
+            if (tile.update(f, t, b, 1.0 / 60) && i >= 120) last_active = i;
+            if (i == 119) charged = ph_h2f(tile.read()[at]);
+            if (i == 179) after_1s = ph_h2f(tile.read()[at]);
+        }
+        double expect_charged = 1 - exp(-2.0 / b.tau_rise), expect_1s = expect_charged * exp(-1.0 / b.tau_decay);
+        report("7", "burn charges under 2 s of white, then drains", fabs(charged - expect_charged) < 0.01 && fabs(after_1s - expect_1s) < 0.01,
+               fmt("charge %.3f (theory %.3f); 1 s after removal %.3f (theory %.3f)", charged, expect_charged, after_1s, expect_1s));
+        report("7", "with burn on, the tile still goes idle", last_active > 120 && last_active < 700,
+               fmt("last active frame is %.1f s after the square left", (last_active - 119) / 60.0));
+    }
+    // d. what half precision costs: the same flash through v1 (32-bit) and v2 (half)
+    {
+        PhosphorTuning t;
+        BurnTuning b;
+        Frame f(W, H);
+        Tile v1(W, H);
+        Tile2 v2(W, H);
+        double worst = 0;
+        for (int i = 0; i < 60; i++) {
+            f.clear(20, 20, 20);
+            if (i >= 4 && i < 16) f.rect(90, 40, 80, 60, 255, 220, 180);
+            f.upload();
+            v1.update(f.d, f.px.data(), W, 0, 0, t, 1.0 / 60);
+            v2.update(f, t, b, 1.0 / 60);
+            for (size_t k = 0; k < v1.ref.size(); k++)
+                if ((k & 3) != 3) worst = std::max(worst, (double)fabsf(v1.ref[k] - ph_h2f(v2.ref[k])));
+        }
+        report("7", "half precision stays close to the 32-bit state through a flash", worst < 2e-3, fmt("largest difference %.1e of full white", worst));
+    }
+}
+
 int main(int argc, char **argv) {
     std::string root = argc > 1 ? argv[1] : ".";
     try {
@@ -348,7 +529,12 @@ int main(int argc, char **argv) {
         fprintf(g_json, "{\"device\": \"%s\", \"driver_cuda\": \"%s\", \"nvrtc\": \"%s\", \"checks\": [", cu.device_name.c_str(),
                 cu.driver_version.c_str(), cu.nvrtc_version.c_str());
         printf("Stage 1 correctness: %s, CUDA %s driver, NVRTC %s\n", cu.device_name.c_str(), cu.driver_version.c_str(), cu.nvrtc_version.c_str());
-        test1(); test2(); test3(); test4(); test5(); test6();
+        k_update_v2 = cu.fn("phosphor_update_v2_buf");
+        float lut[256];
+        for (int i = 0; i < 256; i++) lut[i] = cpu_srgb_to_linear(i * (1.0f / 255.0f));
+        CU(cuMemAlloc(&d_lut, sizeof lut));
+        CU(cuMemcpyHtoD(d_lut, lut, sizeof lut));
+        test1(); test2(); test3(); test4(); test5(); test6(); test7();
         fprintf(g_json, "\n], \"failed\": %d}\n", g_fail);
         fclose(g_json);
         printf("%s\n", g_fail ? "FAILED" : "all checks passed");

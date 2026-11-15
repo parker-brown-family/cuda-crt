@@ -52,7 +52,7 @@ struct Bench {
     Shared sh_frames[K], sh_out;
     Existing existing;
     GlslSurf gs, gs16;
-    CudaSurf cs;
+    CudaSurf cs, cs2;  // cs2: version 2, half-precision state + halation images
     CUevent ev0{}, ev1{};
 
     void setup(int w, int h) {
@@ -72,6 +72,7 @@ struct Bench {
         gs.create(W, H);
         gs16.create(W, H, GL_RGBA16F);
         cs.create(W, H);
+        cs2.create(W, H, true);
         glFinish();
     }
     void teardown() {
@@ -79,7 +80,7 @@ struct Bench {
         sh_out.unreg();
         glDeleteFramebuffers(3, out_fbo); glDeleteTextures(3, out_tex);
         glDeleteFramebuffers(1, &screen_fbo); glDeleteTextures(1, &screen_tex);
-        gs.destroy(); gs16.destroy(); cs.destroy();
+        gs.destroy(); gs16.destroy(); cs.destroy(); cs2.destroy();
         glDeleteProgram(existing.prog);
         glFinish();
     }
@@ -119,6 +120,26 @@ struct Bench {
             GLuint64 ns = 0;
             glGetQueryObjectui64v(q_time, GL_QUERY_RESULT, &ns);
             gpu_ms = ns / 1e6;
+        } else if (path.rfind("cuda_v2", 0) == 0) {
+            // cuda_v2_plain: the version 1 picture on half-precision state (the speed change alone)
+            // cuda_v2:       plus burn ghost and halation (three more small kernels)
+            bool extras = path == "cuda_v2";
+            Look k = look;
+            if (!extras) k.burn.gain = 0.0f;
+            PhosphorStepV2 p = make_step_v2(k.phosphor, k.burn, dt, cs2.fresh);
+            cuda.begin(sh_frames[i % K], &sh_out);
+            CU(cuEventRecord(ev0, 0));
+            cuda.update_v2(cs2, 0, 0, p);
+            if (extras) cuda.glow(cs2, k.glow_knee);
+            cuda.optics(cs2, 0, 0, make_optics(k, t, H, extras));
+            CU(cuEventRecord(ev1, 0));
+            *active = cuda.active_result();
+            cuda.end();
+            present(2);
+            glFinish();
+            float ms = 0;
+            CU(cuEventElapsedTime(&ms, ev0, ev1));
+            gpu_ms = ms;
         } else {  // cuda_update | cuda_full
             PhosphorStep p = make_step(look.phosphor, dt, cs.fresh);
             bool full = path != "cuda_update";
@@ -140,7 +161,7 @@ struct Bench {
 
     Stats run(const std::string &path, int n, int hz /*0 = back to back*/, double sim_hz) {
         Stats s;
-        gs.fresh = true; gs16.fresh = true; cs.fresh = true;
+        gs.fresh = true; gs16.fresh = true; cs.fresh = true; cs2.fresh = true;
         const int warm = 40;
         const double dt = 1.0 / sim_hz;
         auto next = Clock::now();
@@ -209,7 +230,27 @@ struct Bench {
                 worst = std::max(worst, d); mean += d; over1 += d > 1; count++;
             }
         }
-        fprintf(f, "%d,%d,%s,24,%d,%.5f,%.6f\n", W, H, scanlines ? "full_look" : "scanlines_off", worst, mean / count, 100.0 * over1 / count);
+        fprintf(f, "glsl_vs_cuda,%d,%d,%s,24,%d,%.5f,%.6f\n", W, H, scanlines ? "full_look" : "scanlines_off", worst, mean / count, 100.0 * over1 / count);
+        // and version 1 against version 2 with its extras off: what half-precision state
+        // and the texture unit's own sRGB decode change in the final picture
+        cs.destroy(); cs.create(W, H);
+        cs2.destroy(); cs2.create(W, H, true);
+        worst = 0; mean = 0; over1 = 0; count = 0;
+        for (int i = 0; i < 24; i++) {
+            bool act;
+            frame("cuda_full", i, 1.0 / 60, &act);
+            glBindFramebuffer(GL_READ_FRAMEBUFFER, out_fbo[2]);
+            glReadPixels(0, 0, W, H, GL_RGBA, GL_UNSIGNED_BYTE, a.data());
+            frame("cuda_v2_plain", i, 1.0 / 60, &act);
+            glBindFramebuffer(GL_READ_FRAMEBUFFER, out_fbo[2]);
+            glReadPixels(0, 0, W, H, GL_RGBA, GL_UNSIGNED_BYTE, b.data());
+            for (size_t p = 0; p < a.size(); p++) {
+                if ((p & 3) == 3) continue;
+                int d = abs((int)a[p] - (int)b[p]);
+                worst = std::max(worst, d); mean += d; over1 += d > 1; count++;
+            }
+        }
+        fprintf(f, "cuda_v1_vs_v2_plain,%d,%d,%s,24,%d,%.5f,%.6f\n", W, H, scanlines ? "full_look" : "scanlines_off", worst, mean / count, 100.0 * over1 / count);
         look = keep;
     }
 };
@@ -220,8 +261,8 @@ int main(int argc, char **argv) {
     bool quick = argc > 2 && std::string(argv[2]) == "quick";
     try {
         b.gl.init(false);
-        b.cu.init();
-        b.cu.load(b.root + "/kernels/phosphor.cu", b.root);
+        b.cu.init(cuda_device_for_gl());
+        b.cu.load_all(b.root);
         b.glsl.init(b.root);
         b.cuda.init(b.cu);
         glGenQueries(1, &b.q_time);
@@ -266,9 +307,11 @@ int main(int argc, char **argv) {
         FILE *fc = fopen((b.root + "/out/glsl_vs_cuda_image.csv").c_str(), "w");
         fprintf(f, "path,width,height,pacing,frames,gpu_ms_p50,gpu_ms_p95,gpu_ms_p99,total_ms_p50,total_ms_p95,total_ms_p99,"
                    "cpu_ms_p50,state_vram_mb,gpu_mhz_at_end,gpu_timer,total_timer\n");
-        fprintf(fb, "width,height,map_ms_p50,map_ms_p95,kernels_synced_ms_p50,kernels_synced_ms_p95,unmap_present_ms_p50,unmap_present_ms_p95\n");
-        fprintf(fc, "width,height,look,frames,max_abs_diff_8bit,mean_abs_diff_8bit,percent_values_differing_by_more_than_1\n");
-        const char *paths[] = {"existing", "glsl_update", "glsl_full_noprobe", "glsl_full", "glsl_full_16f", "cuda_update", "cuda_full"};
+        // begin = map both textures + create the texture and surface objects + wait; it is NOT mapping alone.
+        // end = destroy those objects + unmap + copy the result to the stand-in target + glFinish.
+        fprintf(fb, "width,height,begin_ms_p50,begin_ms_p95,kernels_synced_ms_p50,kernels_synced_ms_p95,end_and_copy_ms_p50,end_and_copy_ms_p95\n");
+        fprintf(fc, "pair,width,height,look,frames,max_abs_diff_8bit,mean_abs_diff_8bit,percent_values_differing_by_more_than_1\n");
+        const char *paths[] = {"existing", "glsl_update", "glsl_full_noprobe", "glsl_full", "glsl_full_16f", "cuda_update", "cuda_full", "cuda_v2_plain", "cuda_v2"};
         int sizes[][2] = {{960, 540}, {1920, 1080}, {3840, 2160}};
         for (auto &sz : sizes) {
             b.setup(sz[0], sz[1]);
@@ -279,7 +322,7 @@ int main(int argc, char **argv) {
                     int n = quick ? 60 : (hz == 0 ? 600 : hz == 60 ? 300 : 432);
                     Stats s = b.run(path, n, hz, hz ? hz : 60);
                     int mhz = gpu_clock_mhz();
-                    double vram = path == "existing" ? 0 : path == "glsl_full_16f" ? b.gs16.bytes() / 1048576.0 : path[0] == 'g' ? b.gs.bytes() / 1048576.0 : b.cs.bytes() / 1048576.0;
+                    double vram = path == "existing" ? 0 : path == "glsl_full_16f" ? b.gs16.bytes() / 1048576.0 : path.rfind("cuda_v2", 0) == 0 ? b.cs2.bytes() / 1048576.0 : path[0] == 'g' ? b.gs.bytes() / 1048576.0 : b.cs.bytes() / 1048576.0;
                     fprintf(f, "%s,%d,%d,%s,%d,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.1f,%s,%s,%s\n", p, sz[0], sz[1],
                             hz == 0 ? "back_to_back" : hz == 60 ? "paced_60hz" : "paced_144hz", n, pct(s.gpu, .5), pct(s.gpu, .95),
                             pct(s.gpu, .99), pct(s.total, .5), pct(s.total, .95), pct(s.total, .99), pct(s.cpu, .5), vram,

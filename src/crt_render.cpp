@@ -5,7 +5,12 @@
 //     bin/crt_render . --size 1280x720 --fps 60 --path cuda |
 //     ffmpeg -f rawvideo -pix_fmt rgba -s 1280x720 -r 60 -i - out.mp4
 //
-// --path cuda | glsl | existing | pass
+// --path cuda2 | cuda | glsl | existing | pass     (cuda2 = half-precision state,
+//                                                   burn ghost, halation, optional mask)
+// --burn rise,decay           burn time constants in milliseconds
+// --vector lissajous|scope --frames N
+//                             vector mode: no input video; a beam draws the figure
+//                             straight into the phosphor (reads nothing from stdin)
 // --tiles "x,y,w,h;x,y,w,h"   one phosphor surface per tile (default: the whole frame)
 // --decay r,g,b   --rise ms   phosphor time constants in milliseconds
 // --set name=value,...        any dial in Look (curv, scan, glare, tracking, track_rest, ...)
@@ -37,7 +42,8 @@ static void write_all(const void *buf, size_t n) {
 
 int main(int argc, char **argv) {
     if (argc < 2) { fprintf(stderr, "usage: crt_render <lab-root> --size WxH [--fps F] [--path cuda|glsl|existing|pass] ...\n"); return 2; }
-    std::string root = argv[1], path = "cuda";
+    std::string root = argv[1], path = "cuda", vector_fig;
+    long vector_frames = 600;
     int W = 0, H = 0;
     double fps = 60;
     Look look;
@@ -47,7 +53,9 @@ int main(int argc, char **argv) {
         {"curv", &look.curv}, {"k1", &look.k1}, {"k2", &look.k2}, {"aberr", &look.aberr}, {"scan", &look.scan},
         {"scan_step", &look.scan_step}, {"glow", &look.glow}, {"glow_px", &look.glow_px}, {"bloom", &look.bloom},
         {"vign", &look.vign}, {"specular", &look.specular}, {"glare", &look.glare}, {"tracking", &look.tracking},
-        {"track_rest", &look.track_rest}, {"track_sweep", &look.track_sweep}, {"band_h", &look.band_h}, {"flicker", &look.flicker}};
+        {"track_rest", &look.track_rest}, {"track_sweep", &look.track_sweep}, {"band_h", &look.band_h}, {"flicker", &look.flicker},
+        {"burn", &look.burn.gain}, {"afterglow", &look.burn.gain}, {"halation", &look.halation}, {"mask", &look.mask},
+        {"glow_knee", &look.glow_knee}, {"beam", &look.beam}, {"degauss_at", &look.degauss_at}};
     for (int i = 2; i < argc; i++) {
         std::string a = argv[i], v = i + 1 < argc ? argv[i + 1] : "";
         if (a == "--size") { sscanf(v.c_str(), "%dx%d", &W, &H); i++; }
@@ -59,6 +67,12 @@ int main(int argc, char **argv) {
             int n = sscanf(v.c_str(), "%lf,%lf,%lf", &r, &g, &b);
             if (n == 1) g = b = r;
             look.phosphor.tau_decay[0] = r / 1000; look.phosphor.tau_decay[1] = g / 1000; look.phosphor.tau_decay[2] = b / 1000; i++;
+        } else if (a == "--vector") { vector_fig = v; path = "cuda2"; i++; }
+        else if (a == "--frames") { vector_frames = atol(v.c_str()); i++; }
+        else if (a == "--burn") {
+            double r = 500, d = 800;
+            sscanf(v.c_str(), "%lf,%lf", &r, &d);
+            look.burn.tau_rise = r / 1000; look.burn.tau_decay = d / 1000; i++;
         } else if (a == "--tiles") {
             const char *s = v.c_str();
             Rect r;
@@ -98,14 +112,16 @@ int main(int argc, char **argv) {
     Shared sh_frame, sh_out;
     std::vector<GlslSurf> gsurf(tiles.size());
     std::vector<CudaSurf> csurf(tiles.size());
+    const bool v2 = path == "cuda2";
+    if (v2) path = "cuda";
     if (path == "cuda") {
         try {
-            cu.init();
-            cu.load(root + "/kernels/phosphor.cu", root);
+            cu.init(cuda_device_for_gl());
+            cu.load_all(root);
             cuda.init(cu);
             sh_frame.reg(frame_tex, CU_GRAPHICS_REGISTER_FLAGS_READ_ONLY);
             sh_out.reg(out_tex, CU_GRAPHICS_REGISTER_FLAGS_SURFACE_LDST);
-            for (size_t i = 0; i < tiles.size(); i++) csurf[i].create(tiles[i].w, tiles[i].h);
+            for (size_t i = 0; i < tiles.size(); i++) csurf[i].create(tiles[i].w, tiles[i].h, v2);
             cuda_ok = true;
         } catch (std::exception &e) { fprintf(stderr, "crt_render: CUDA unavailable, passing frames through: %s\n", e.what()); }
     }
@@ -115,7 +131,29 @@ int main(int argc, char **argv) {
     std::vector<uint8_t> in((size_t)W * H * 4), out(in.size());
     const double dt = 1.0 / fps;
     long n = 0, n_active = 0;
-    while (read_all(in.data(), in.size())) {
+    // vector mode: the "frame" is black, and the beam's strokes for each frame are computed here
+    const int SEG = 220;
+    std::vector<float> segs(SEG * 4);
+    CUdeviceptr d_segs = 0;
+    if (!vector_fig.empty() && cuda_ok) {
+        CU(cuMemAlloc(&d_segs, segs.size() * 4));
+        for (size_t i = 0; i < in.size(); i += 4) { in[i] = in[i + 1] = in[i + 2] = 0; in[i + 3] = 255; }
+    }
+    auto beam_at = [&](double u, float &x, float &y) {  // u = beam time in seconds
+        const Rect &r = tiles[0];
+        double cx = r.w * 0.5, cy = r.h * 0.5, ax = r.w * 0.36, ay = r.h * 0.36;
+        if (vector_fig == "scope") {  // a trace sweeping left to right 60 times a second, the wave drifting
+            double sweep = u * 60.0 - floor(u * 60.0);
+            double ph = u * 0.9;
+            x = (float)(r.w * (0.08 + 0.84 * sweep));
+            y = (float)(cy - ay * (0.55 * sin(6.2831853 * (2.0 * sweep + ph)) + 0.30 * sin(6.2831853 * (5.0 * sweep - 1.7 * ph)) * sin(ph * 2.3)));
+        } else {  // lissajous: two sines whose ratio and phase drift, so the knot turns and re-ties itself
+            double fx = 3.0 + 0.5 * sin(u * 0.21), fy = 2.0, ph = u * 0.6;
+            x = (float)(cx + ax * sin(6.2831853 * 41.0 * fx * u / 3.0 + ph));
+            y = (float)(cy + ay * sin(6.2831853 * 41.0 * fy * u / 3.0));
+        }
+    };
+    while (vector_fig.empty() ? read_all(in.data(), in.size()) : n < vector_frames) {
         float t = (float)(n * dt);
         glBindTexture(GL_TEXTURE_2D, frame_tex);
         glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, W, H, GL_RGBA, GL_UNSIGNED_BYTE, in.data());
@@ -125,14 +163,27 @@ int main(int argc, char **argv) {
                 cuda.begin(sh_frame, &sh_out);
                 cuda.passthrough(0, 0, W, H);  // the desk between the tiles
                 for (size_t i = 0; i < tiles.size(); i++) {
-                    cuda.update(csurf[i], tiles[i].x, tiles[i].y, make_step(look.phosphor, dt, csurf[i].fresh));
-                    cuda.optics(csurf[i], tiles[i].x, tiles[i].y, make_optics(look, t, tiles[i].h));
+                    if (v2) {
+                        cuda.update_v2(csurf[i], tiles[i].x, tiles[i].y, make_step_v2(look.phosphor, look.burn, dt, csurf[i].fresh));
+                        if (d_segs && i == 0) {  // the strokes the beam swept since the last frame
+                            for (int k = 0; k < SEG; k++) {
+                                beam_at((n + (double)k / SEG) * dt, segs[4 * k], segs[4 * k + 1]);
+                                beam_at((n + (double)(k + 1) / SEG) * dt, segs[4 * k + 2], segs[4 * k + 3]);
+                            }
+                            CU(cuMemcpyHtoD(d_segs, segs.data(), segs.size() * 4));
+                            const float p31[3] = {0.30f, 1.0f, 0.42f};
+                            cuda.beam(csurf[i], d_segs, SEG, std::max(1.1f, tiles[i].h / 420.0f), 0.55f, p31);
+                        }
+                        if (look.halation > 0.0f) cuda.glow(csurf[i], look.glow_knee);
+                    } else cuda.update(csurf[i], tiles[i].x, tiles[i].y, make_step(look.phosphor, dt, csurf[i].fresh));
+                    cuda.optics(csurf[i], tiles[i].x, tiles[i].y, make_optics(look, t, tiles[i].h, v2));
                 }
                 active = cuda.active_result();
                 cuda.end();
                 drawn = true;
             } catch (std::exception &e) {
                 fprintf(stderr, "crt_render: CUDA failed at frame %ld, passing frames through from here: %s\n", n, e.what());
+                cuda.abandon();  // unmap before OpenGL touches those textures again
                 cuda_ok = false;
             }
         } else if (path == "glsl" || path == "existing") {
@@ -157,7 +208,7 @@ int main(int argc, char **argv) {
         n++;
         n_active += active;
     }
-    fprintf(stderr, "crt_render: %ld frames via %s%s; phosphor still moving on %ld of them\n", n, path.c_str(),
+    fprintf(stderr, "crt_render: %ld frames via %s%s; phosphor still moving on %ld of them\n", n, v2 ? "cuda2" : path.c_str(),
             path == "cuda" && !cuda_ok ? " (FELL BACK TO PASSTHROUGH)" : "", n_active);
     return 0;
 }

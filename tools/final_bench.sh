@@ -7,5 +7,5 @@ bin/stage2_bench . > out/bench.log 2>&1
 echo "bench exit $?" >> out/bench.log
 cond > out/gpu_conditions_after.txt 2>&1
 tail -1 out/bench.log
-python3 tools/summarize.py | grep -E "###|existing|glsl_full |glsl_full_16f|cuda_full"
+python3 tools/summarize.py | grep -E "###|existing|glsl_full |cuda_full|cuda_v2"
 cat out/block_sweep.csv out/cuda_breakdown.csv out/glsl_vs_cuda_image.csv out/gpu_conditions_before.txt out/gpu_conditions_after.txt

@@ -90,7 +90,7 @@ int main(int argc, char **argv) {
     try {
         gl.init(false);
         glsl.init(root);
-        if (path == "existing") existing.init(root + "/../../crt/crt-glass.frag", look, tiles[0].x, tiles[0].y, tiles[0].w, tiles[0].h);
+        if (path == "existing") existing.init(root + "/baseline/crt-glass.frag", look, tiles[0].x, tiles[0].y, tiles[0].w, tiles[0].h);
     } catch (std::exception &e) { fprintf(stderr, "crt_render: %s\n", e.what()); return 2; }
 
     GLuint frame_tex = gl_tex(GL_RGBA8, W, H, GL_LINEAR), out_tex = gl_tex(GL_RGBA8, W, H, GL_NEAREST);

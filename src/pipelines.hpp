@@ -1,6 +1,6 @@
 // The three render paths behind one shape, so the benchmark and the renderer
 // drive them identically:
-//   Existing  the shipped crt/crt-glass.frag, as it is: one pass, no memory
+//   Existing  the shipped omarchy-crt glass shader (baseline/crt-glass.frag), as it is: one pass, no memory
 //   Glsl      phosphor state + glass in fragment shaders (the matched reference)
 //   CudaPath  phosphor state + glass in CUDA kernels, sharing OpenGL's textures
 // Convention everywhere: texel row 0 is the TOP of the picture.
@@ -158,7 +158,7 @@ struct Glsl {
 };
 
 // ---- the shipped shader, as the baseline ------------------------------------
-// Reads crt/crt-glass.frag from the repository (never writes it), splices in one
+// Reads baseline/crt-glass.frag (never writes it), splices in one
 // tube the way `crt render` does, and sets the same dials the other paths use.
 struct Existing {
     GLuint prog = 0;

@@ -1,0 +1,422 @@
+#version 320 es
+// omarchy-crt — the MONITOR pass: curved glass over the whole desktop.
+//
+// THIS FILE IS A TEMPLATE AND IS NEVER WRITTEN TO. `crt` renders it, plus the
+// knob state in $XDG_STATE_HOME/omarchy/crt/knobs.json, into
+// ~/.config/hypr/shaders/crt-glass.frag, and points Hyprland at that. Editing
+// the constants here changes the DEFAULTS a fresh install starts from; to turn
+// a knob, use the bar widget or `crt set`.
+//
+// The optics are a port of terminal-delight's own display stack, dial for dial
+// (app/src/crt.rs + gpui_wgpu/src/crt_pass.wgsl): px-true scanlines, the
+// sweeping tracking band with its thin white core, occasional stepped flicker
+// bursts, the glass glare hotspot + diagonal streak, centre phosphor bloom,
+// vignette — and a monitor-OSD colour grade (brightness / contrast /
+// saturation / gamma) applied last, the way the terminal grades its own tube.
+//
+// Two of the constants below are colours, and they are the ONLY thing here
+// with an opinion about your palette: PHOSPHOR and GLARE_TINT. `crt` derives
+// them from the staged theme's own colors.toml (accent and bright_foreground —
+// keys all 22 stock Omarchy themes carry), which is why this is a plugin and
+// not a theme. Everything else is optics, and optics do not care what colour
+// your desktop is.
+//
+// Hyprland pairs screen shaders with a GLES3 vertex shader, so the version
+// directive is required and the dialect is in/out/texture(), not varying.
+// The clock is OPT-IN: see ANIMATED in the config block — Hyprland treats any
+// screen shader that declares `uniform float time` as animated and switches
+// damage tracking off for it (full-screen redraws every frame), so the still
+// glass deliberately declares no clock at all.
+
+precision highp float;
+
+in vec2 v_texcoord;
+uniform sampler2D tex;
+out vec4 fragColor;
+
+// ---- MONITOR CONFIG ----------------------------------------------------
+// One knob per line, 1:1 with a terminal-delight dial (named in the comment).
+// These are DEFAULTS. `crt` renders them through knobs.json into the live
+// shader; the four front-panel dials (BARREL, FADE, TRACKING, SCANLINE) each
+// drive a group of them, and every knob is also reachable one at a time.
+#define ANIMATED 0              // 1 = the tracking band / flicker / jiggle actually move.
+                                // Costs what Hyprland's warning says it costs: a time
+                                // uniform forces damage tracking off, i.e. the whole
+                                // screen redraws every frame. 0 = still glass — no clock,
+                                // no warning, the three motion knobs freeze invisibly.
+                                // `crt` raises this when you turn a motion knob and
+                                // drops it when all three are zero.
+const float CURV       = 0.00;  // whole-desktop barrel — the per-window warp carries the curve
+const float TUBE_K1    = 0.14;  // per-tile barrel (td-tubes). THIS IS THE AIM KNOB: the
+const float TUBE_K2    = 0.06;  // gather pulls a tile's content inward, and the cursor with
+                                // it, so a click still lands — but your HAND travels to the
+                                // target's true position, up to ~4.25% of the tile away at a
+                                // corner (~40px on a 900px tile). Halve both to halve that.
+                                // omarchy-terminal-delight-theme's test/probe-aim
+                                // measures it on your own screen.
+const float ABERR      = 0.55;  // chromatic split at the rim
+const float SCAN       = 0.22;  // scanline depth              (TD scanline_opacity)
+const float SCAN_STEP  = 4.0;   // px between scanlines        (TD scanline_step; 0 = legacy sin lines)
+const float LINES      = 480.0; // legacy sin line pairs, used only when SCAN_STEP = 0
+const float GLOW       = 0.40;  // 4-tap bloom
+const float BLOOM      = 0.35;  // centre phosphor wash        (TD bloom)
+const float VIGN       = 0.32;  // corner falloff              (TD vignette)
+const float SPECULAR   = 0.50;  // upper-left room-light catch on the glass
+const float TRACKING   = 0.60;  // band strength AND speed — see track_sweep()
+const float TRACK_REST   = 9.0; // seconds of quiet between passes
+const float TRACK_SWEEP  = 8.0; // nominal seconds per sweep; TRACKING scales it
+const float BAND_H     = 264.0; // band height in px           (crt.rs BAND_H: 160)
+const float FLICKER    = 0.35;  // stepped burst depth         (TD flicker)
+const float GLARE      = 0.00;  // WHOLE-SCREEN glare — off by default now that the
+                                //   per-window warp shaders draw glare per tile
+                                //   (TD screen_glare; raise for one big sheet of glass)
+const float JIGGLE     = 0.00;  // rare 1–2px vertical hop     (TD jiggle; earn it before desktop-wide)
+const float BRIGHTNESS = 0.00;  // -1..1                       (TD grade brightness)
+const float CONTRAST   = 0.00;  // -1..1                       (TD grade contrast)
+const float SATURATION = 1.00;  // 0..2                        (TD grade colour)
+const float GAMMA      = 1.00;  // 0.5..2                      (TD grade gamma)
+const vec3  PHOSPHOR   = vec3(0.133, 0.773, 0.369); // from the staged theme's accent
+const vec3  GLARE_TINT = vec3(0.72, 1.00, 0.78);    // crt_pass.wgsl glare_color
+// ---- END CONFIG --------------------------------------------------------
+
+// The clock exists only when asked for. Declaring `uniform float time` — even
+// unused — is what trips Hyprland's animated-shader path (the warning keys off
+// the declaration, not the use), so the still glass compiles a const instead
+// and every time-driven expression below folds away.
+#if ANIMATED
+uniform float time;
+#else
+const float time = 0.0;
+#endif
+
+const float K1 = CURV * 0.14;
+const float K2 = CURV * 0.06;
+
+vec2 warp(vec2 uv) {
+    vec2  c  = uv - 0.5;
+    float r2 = dot(c, c);
+    return 0.5 + c * (1.0 + K1 * r2 + K2 * r2 * r2);
+}
+
+// ---- THE TUBES: one per tile, drawn in the pass that owns the cursor -------
+// The per-window shader (shaders/surface.frag) bows a window's texture during
+// renderWorkspace() — BEFORE renderSoftwareCursorsFor() puts the cursor into
+// the same buffer. Nothing drawn there can ever be click-correct: the
+// compositor hands the click to the flat window box while the picture has
+// moved up to 4% of the window away from it. The monitor pass runs after the
+// cursor is composited, so a tube drawn HERE moves cursor and content
+// together and a click lands where you aimed. Same reason terminal-delight's
+// own CRT pass is click-correct — see warp_screen_to_content in
+// app/src/pane.rs: the shader is a gather, and everything that has to agree
+// with it reads through the identical forward map.
+//
+// Hyprland screen shaders accept no custom uniforms, so the tile rects are
+// baked in as constants and the shader is recompiled when the layout changes —
+// the same trick td-monitor already uses for the knob block, a few ms and no
+// relogin. `td-tubes apply` rewrites the TUBE DATA block below.
+
+uniform int wl_output; // monitor id — one frag serves every monitor
+
+// TUBE_K1/TUBE_K2 are declared with the other knobs in the MONITOR CONFIG block
+// above, so `crt` lists them and can set them. They started life down
+// here, which meant `crt set TUBE_K1 …` worked while `crt` never
+// mentioned the knob existed — the aim cost had no visible dial.
+
+// ZERO HERE IS STRUCTURAL, not a rule anyone has to remember. A tube is
+// runtime state — it exists because some window is open somewhere — and
+// runtime state lives in $XDG_STATE_HOME/omarchy/crt/tubes.glsl, which
+// `crt render` splices in below. This file is a template that is never written
+// to, so a window layout has no path into a commit and there is nothing for a
+// test to pin. Every branch below compiles out at count 0: tube_at() is
+// `return -1`, tube_map() is the identity, edge is untouched.
+// ---- TUBE DATA (spliced by `crt render` from state — do not hand-edit) ----
+#define TUBE_COUNT 0
+#if TUBE_COUNT > 0
+const vec4  TUBE_RECT[TUBE_COUNT] = vec4[TUBE_COUNT](vec4(0.0));
+const int   TUBE_MON[TUBE_COUNT]  = int[TUBE_COUNT](0);
+const float TUBE_CURV[TUBE_COUNT] = float[TUBE_COUNT](0.0);
+const int   TUBE_PASS[TUBE_COUNT] = int[TUBE_COUNT](0);
+const int   TUBE_QUIET[TUBE_COUNT] = int[TUBE_COUNT](0);
+#endif
+// ---- END TUBE DATA ----
+
+// TUBE_CURV is how a surface opts out of the BOW without leaving a hole. A
+// surface that should not bend still needs to CLAIM its pixels, because
+// tube_at picks the first rect containing a pixel and an unclaimed region falls
+// through to whatever rect is underneath. Leaving such a window out of the list
+// is what tears it: it gets drawn through a neighbour's map. So it gets a tube
+// with curvature 0, which is the identity and draws no bezel, and nothing
+// else's map can reach it. That is what a bar or a tray wants — flat, immune to
+// its neighbours, and still sitting behind the same glass as everything else.
+//
+// TUBE_PASS is the OTHER opt-out, and it is a different question. Curvature
+// reaches exactly one thing, tube_map; the scanlines, the vignette, the centre
+// bloom, the aberration, the glare, the specular and the tracking band all key
+// off the tube-local coordinate and apply whatever the curvature is. A surface
+// that draws its own CRT — terminal-delight, which has all of those per pane —
+// was therefore getting a second complete set on top of its own: two sets of
+// scanlines, two vignettes, two bands. TUBE_PASS = 1 means hand the pixels back
+// untouched. `crt passthrough` keeps the list.
+//
+// TUBE_QUIET = 1 stops everything the CLOCK drives on that tube — the band
+// and the flicker — while leaving the still optics alone. It is set for tubes
+// on a monitor that does not have focus, because such a monitor usually stops
+// being rendered at all, and a shader whose time never advances leaves the
+// band stranded mid-screen until something else repaints. Scanlines are
+// deliberately NOT covered: they do not move, so a frozen frame of them looks
+// exactly like a live one, and removing them would be the only visible change.
+
+// Which tube owns this pixel, or -1 for bare desktop. td-tubes emits the list
+// floating windows before tiles, then focus order within each group. The first
+// hit wins, so an inactive floating window keeps its pixels above the tiles.
+int tube_at(vec2 px) {
+#if TUBE_COUNT > 0
+    for (int i = 0; i < TUBE_COUNT; i++) {
+        if (TUBE_MON[i] != wl_output)
+            continue;
+        vec2 l = (px - TUBE_RECT[i].xy) / TUBE_RECT[i].zw;
+        if (l.x >= 0.0 && l.x <= 1.0 && l.y >= 0.0 && l.y <= 1.0)
+            return i;
+    }
+#endif
+    return -1;
+}
+
+// Map a screen texcoord through tube `i` — identity when `i` is -1. `edge`
+// falls to 0 across the overscan band the gather pulls in from past the tile's
+// own edge; that band is the bezel, and it is why the tube reads as glass with
+// a rim rather than as a squashed window.
+// `local` comes back as the position WITHIN the tube, 0..1 across its own
+// rect — and it is what every effect below is measured in. Without it each
+// effect had only the screen to measure against, so one vignette covered the
+// whole desktop and one band swept across every window at once. On bare
+// desktop, where there is no tube, local is the screen coordinate and
+// everything behaves exactly as it did.
+vec2 tube_map(int i, vec2 t, vec2 res, out float edge, out vec2 local) {
+    edge  = 1.0;
+    local = t;
+#if TUBE_COUNT > 0
+    if (i < 0)
+        return t;
+    vec4  r  = TUBE_RECT[i];
+    float k  = TUBE_CURV[i];
+    vec2  c  = ((t * res) - r.xy) / r.zw - 0.5;
+    float r2 = dot(c, c);
+    vec2  w  = 0.5 + c * (1.0 + TUBE_K1 * k * r2 + TUBE_K2 * k * r2 * r2);
+    vec2  e  = min(w, 1.0 - w);
+    // At k = 0 this is the identity, and a flat surface must not wear a bezel:
+    // the smoothstep would still black the outermost pixels of its own rect.
+    edge     = k > 0.0 ? smoothstep(0.0, 0.004, min(e.x, e.y)) : 1.0;
+    local    = clamp(w, 0.0, 1.0);
+    return (r.xy + local * r.zw) / res;
+#else
+    return t;
+#endif
+}
+
+// The tube's own pixel size, for anything measured in pixels rather than in
+// fractions — the band height and the scanline pitch. Falls back to the whole
+// screen when the pixel belongs to no tube.
+vec2 tube_size(int i, vec2 res) {
+#if TUBE_COUNT > 0
+    if (i >= 0)
+        return TUBE_RECT[i].zw;
+#endif
+    return res;
+}
+
+// A per-tube offset into the tracking cycle. Real sets on one desk do not sweep
+// in unison, and tiles that did would read as one screen-wide band again —
+// which is the thing this whole change is for.
+float tube_phase(int i) {
+    return i < 0 ? 0.0 : fract(sin(float(i) * 12.9898) * 43758.5453) * 40.0;
+}
+// ---- end tubes -------------------------------------------------------------
+
+float hash(float n) { return fract(sin(n * 127.1) * 43758.5453); }
+
+// Occasional stepped flicker: a 0.45 s burst of five brightness steps —
+// 0.86 / 1.06 / 0.90 / 1.03 / 0.95, the terminal's exact ladder — landing at
+// a hashed moment inside every 13 s window. Like crt.rs it scales the
+// scanlines and the vignette, not the picture: the tube breathes, the text
+// doesn't strobe.
+float flicker_mul(float t) {
+    if (FLICKER < 0.001) return 1.0;
+    float win = floor(t / 13.0);
+    float start = win * 13.0 + 2.0 + hash(win) * 8.0;
+    if (t < start || t > start + 0.45) return 1.0;
+    int ph = int((t - start) / 0.09);
+    float s = ph == 0 ? 0.86 : ph == 1 ? 1.06 : ph == 2 ? 0.90 : ph == 3 ? 1.03 : 0.95;
+    return 1.0 + (s - 1.0) * FLICKER;
+}
+
+// The rolling tracking band: BAND_H px tall, a triangle profile peaking at
+// its centre, phosphor-tinted with a thin white core, sweeping top→bottom
+// over TRACK_SWEEP seconds then resting out the period — crt.rs's numbers,
+// as a continuous profile instead of painted rows.
+// The band's speed rides the same knob as its strength: turned down it is 40%
+// slower, turned up 10% faster. One dial, one character — a faint band that
+// also drifts is a calm picture, where a faint band moving at the same rate is
+// just the same band quieter.
+float track_sweep()  { return TRACK_SWEEP * (1.40 - 0.50 * TRACKING); }
+
+// Derived, never stored. A fixed period cannot survive a variable sweep: the
+// band is visible for the sweep out of every period, so a sweep that grew past
+// the period would never rest. The REST is the constant, and it is also the
+// parameter a viewer actually notices — the gap between passes, not the sum.
+float track_period() { return track_sweep() + TRACK_REST; }
+
+vec3 tracking_add(float py, float screen_h, float t, inout float darken) {
+    if (TRACKING < 0.001) return vec3(0.0);
+    // `screen_h` is the TUBE's height when the pixel is in one, so the band is
+    // a band on that monitor rather than a stripe across the desk.
+    float sweep = track_sweep();
+    float tc = mod(t, track_period());
+    if (tc > sweep) return vec3(0.0);
+    float p = tc / sweep;
+    float center = -BAND_H + p * (screen_h + BAND_H * 2.0);
+    float d = 1.0 - clamp(abs(py - center) / (BAND_H * 0.5), 0.0, 1.0);
+    if (d <= 0.0) return vec3(0.0);
+    darken += 0.05 * TRACKING * d;
+    vec3 add = PHOSPHOR * (d * d * 0.05 * TRACKING);
+    if (d > 0.92) add += vec3(0.018 * TRACKING);
+    return add;
+}
+
+// The glass glare: an exponential hotspot up-left plus a diagonal streak —
+// crt_pass.wgsl's formula verbatim, over screen-local UV.
+vec3 glare_add(vec2 uv) {
+    if (GLARE < 0.001) return vec3(0.0);
+    vec2 go = (uv - vec2(0.18, 0.10)) / vec2(0.34, 0.18);
+    float hotspot = exp(-dot(go, go) * 2.2);
+    float band = (1.0 - smoothstep(0.0, 0.10, abs(uv.y + uv.x * 0.22 - 0.17)))
+               * (1.0 - smoothstep(0.0, 0.72, uv.x))
+               * (1.0 - smoothstep(0.0, 0.42, uv.y));
+    float amount = clamp((hotspot * 0.58 + band * 0.34) * GLARE, 0.0, 1.0);
+    return GLARE_TINT * amount;
+}
+
+void main() {
+    vec2  res = vec2(textureSize(tex, 0));
+    float t   = time;
+    float fl  = flicker_mul(t);
+
+    vec2 uv0 = v_texcoord;
+    // jiggle: a two-frame vertical hop at a hashed moment inside every 10 s
+    // window. Off by default — a whole desktop hopping needs to be asked for.
+    if (JIGGLE > 0.001) {
+        float jw = floor(t / 10.0);
+        float js = jw * 10.0 + 4.0 + hash(jw + 7.0) * 6.0;
+        if (t > js && t < js + 0.09) {
+            uv0.y += (hash(jw + 3.0) - 0.5) * 4.0 * JIGGLE / res.y;
+        }
+    }
+    // The desktop curve (CURV) first, then the per-tile tube on top of it, so a
+    // tube rect is looked up in the coordinates the desktop warp already moved.
+    // With CURV at 0 — the normal setting — warp() is the identity and the
+    // tubes are the only curve on the screen.
+    vec2 uvs = warp(uv0);
+
+    // outside the tube -> bezel interior, with a soft edge
+    vec2  e    = min(uvs, 1.0 - uvs);
+    float edge = smoothstep(0.0, 0.003, min(e.x, e.y));
+
+    int   tube = tube_at(uvs * res);
+    float tedge;
+    vec2  L;                       // 0..1 inside this tube — see tube_map
+    vec2  uv   = tube_map(tube, uvs, res, tedge, L);
+    edge       = min(edge, tedge);
+    if (edge <= 0.0) { fragColor = vec4(0.0, 0.0, 0.0, 1.0); return; }
+
+    // A surface that draws its own picture gets it back unread. This has to
+    // come before every effect below rather than being subtracted from each,
+    // because the point is that NOTHING here reaches it.
+    bool quiet = false;
+#if TUBE_COUNT > 0
+    if (tube >= 0 && TUBE_PASS[tube] == 1) {
+        fragColor = vec4(texture(tex, uv).rgb, 1.0);
+        return;
+    }
+    quiet = tube >= 0 && TUBE_QUIET[tube] == 1;
+#endif
+    // Everything the clock drives is off on a quiet tube. The flicker scales
+    // the scanlines and the vignette rather than the picture, so freezing it at
+    // 1.0 is the same as it never having fired.
+    if (quiet) fl = 1.0;
+
+    vec2  tsize = tube_size(tube, res);
+
+    // EVERY EFFECT BELOW IS MEASURED FROM THE TUBE, NOT THE SCREEN. r2 is the
+    // distance from this tube's centre, so a tile gets its own rim rather than
+    // sharing one vignette with the whole desktop.
+    float r2 = dot(L - 0.5, L - 0.5);
+
+    // chromatic aberration: sample R/B at slightly different warps near the rim
+    float a  = ABERR * 0.004 * r2;
+    float ta; vec2 tl;
+    float cr = texture(tex, tube_map(tube, warp(uv0 + vec2(a, 0.0)), res, ta, tl)).r;
+    float cg = texture(tex, uv).g;
+    float cb = texture(tex, tube_map(tube, warp(uv0 - vec2(a, 0.0)), res, ta, tl)).b;
+    vec3  col = vec3(cr, cg, cb);
+
+    // scanlines: px-true — a 1px dark line then a 1px phosphor-tinted line
+    // per SCAN_STEP, following the curve because uv is already warped. The
+    // sin pattern survives as the SCAN_STEP=0 fallback for the old look.
+    float scanA = SCAN * fl;
+    if (scanA > 0.001) {
+        if (SCAN_STEP > 0.5) {
+            // Rows counted down the TUBE, so they bow with it instead of
+            // staying stapled to the desktop underneath.
+            float row = mod(L.y * tsize.y, SCAN_STEP);
+            if (row < 1.0) {
+                col = mix(col, vec3(0.0), scanA);
+            } else if (row < 2.0) {
+                col = mix(col, PHOSPHOR, scanA * 0.22);
+            }
+        } else {
+            col *= 1.0 - scanA * 0.18 * (0.5 + 0.5 * sin(uv.y * LINES * 6.2831853));
+        }
+    }
+
+    // cheap bloom: 4 taps
+    vec3  bl = vec3(0.0);
+    float o  = 0.0013;
+    bl += texture(tex, uv + vec2(o, 0.0)).rgb;
+    bl += texture(tex, uv - vec2(o, 0.0)).rgb;
+    bl += texture(tex, uv + vec2(0.0, o)).rgb;
+    bl += texture(tex, uv - vec2(0.0, o)).rgb;
+    col += GLOW * 0.18 * bl * 0.25;
+
+    // centre phosphor wash: nothing above 5%, ramping to full at 42% and
+    // holding below — the tube's brightest belt, in the theme's own hue.
+    if (BLOOM > 0.001) {
+        col = mix(col, PHOSPHOR, 0.05 * BLOOM * smoothstep(0.05, 0.42, L.y));
+    }
+
+    // the rolling tracking band, plus its band-local scanline pressure
+    float darken = 0.0;
+    if (!quiet)
+        col += tracking_add(L.y * tsize.y, tsize.y, t + tube_phase(tube), darken);
+    col *= 1.0 - darken * 0.5;
+
+    col += glare_add(L);
+
+    // upper-left specular: the room's light source catching the glass
+    if (SPECULAR > 0.001) {
+        vec2 so = (L - vec2(0.05, 0.04)) / vec2(0.13, 0.10);
+        col += vec3(0.05 * SPECULAR) * exp(-dot(so, so)) * fl;
+    }
+
+    // vignette breathes with the flicker, like the terminal's glass
+    col *= 1.0 - VIGN * fl * 1.72 * r2;
+    col *= edge;
+
+    // the grade goes LAST — it is the monitor's front panel, turned after
+    // everything the tube itself does
+    col = pow(max(col, vec3(0.0)), vec3(1.0 / GAMMA));
+    col = (col - 0.5) * (1.0 + CONTRAST) + 0.5 + BRIGHTNESS * 0.35;
+    float lum = dot(col, vec3(0.2126, 0.7152, 0.0722));
+    col = mix(vec3(lum), col, SATURATION);
+
+    fragColor = vec4(clamp(col, 0.0, 1.0), 1.0);
+}

@@ -68,7 +68,7 @@ struct Bench {
         sh_out.reg(out_tex[2], CU_GRAPHICS_REGISTER_FLAGS_SURFACE_LDST);
         screen_tex = gl_tex(GL_RGBA8, W, H, GL_NEAREST);
         screen_fbo = gl_fbo(screen_tex);
-        existing.init(root + "/../../crt/crt-glass.frag", look, 0, 0, W, H);
+        existing.init(root + "/baseline/crt-glass.frag", look, 0, 0, W, H);
         gs.create(W, H);
         gs16.create(W, H, GL_RGBA16F);
         cs.create(W, H);

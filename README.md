@@ -68,6 +68,14 @@ measurement `decision.md` turns on; sample `nvidia-smi` beside it):
 bin/stage2_bench . power cuda_full 2400
 ```
 
+The live demo: terminal footage through two renderers at once, side by side in
+one window, in real time (close it with `q`; `f` is fullscreen). `--dry` runs
+every act with no window:
+
+```bash
+tools/demo.sh
+```
+
 Footage. Any video in, CRT video out:
 
 ```bash

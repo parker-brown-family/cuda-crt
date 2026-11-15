@@ -6,3 +6,4 @@ out/*.mkv
 out/*.png
 out/*.log
 __pycache__/
+out/demo_*.txt

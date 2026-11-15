@@ -1,0 +1,8 @@
+# the CUDA compiler wheels, build output, and rendered media: all rebuildable
+.toolchain/
+bin/
+out/*.mp4
+out/*.mkv
+out/*.png
+out/*.log
+__pycache__/

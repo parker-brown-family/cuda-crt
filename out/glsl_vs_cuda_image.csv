@@ -1,0 +1,7 @@
+width,height,look,frames,max_abs_diff_8bit,mean_abs_diff_8bit,percent_values_differing_by_more_than_1
+960,540,full_look,24,8,0.03144,0.028410
+960,540,scanlines_off,24,9,0.03095,0.033107
+1920,1080,full_look,24,51,0.03504,0.050840
+1920,1080,scanlines_off,24,9,0.03488,0.058759
+3840,2160,full_look,24,55,0.04075,0.101813
+3840,2160,scanlines_off,24,9,0.04045,0.115507

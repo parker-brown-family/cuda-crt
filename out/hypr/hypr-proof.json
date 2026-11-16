@@ -4,7 +4,7 @@
   {
    "pass": true,
    "check": "the plugin initialised CUDA and registered the compositor's GLES textures",
-   "measured": "surface 1920x1080: two GLES textures registered with CUDA, half-precision state allocated"
+   "measured": "ready: NVIDIA GeForce RTX 3080 Laptop GPU, CUDA driver API 13.4, NVRTC 12.9, GL OpenGL ES 3.2 NVIDIA 615.78.08"
   },
   {
    "pass": true,
@@ -13,44 +13,78 @@
   },
   {
    "pass": true,
-   "check": "whole pass, wall clock with the GPU finished either side (copy in, map, three kernels, unmap, copy back)",
-   "measured": "mean 0.99 ms, worst 3.08 ms over 239 frames at 1920x1080"
+   "check": "whole pass, wall clock with the GPU finished either side (copy in, map, kernels, unmap, copy back)",
+   "measured": "mean 0.86 ms, worst 3.19 ms over 239 frames at 1920x1080"
   },
   {
    "pass": true,
-   "check": "an empty desk, glass still: the pass stops being asked for frames",
-   "measured": "759 frames, then 759 two seconds later"
+   "check": "an empty desk: the pass stops being asked for frames",
+   "measured": "762 frames, then 762 two seconds later"
   },
   {
    "pass": true,
    "check": "a window appearing wakes the pass",
-   "measured": "759 frames while idle, 822 a second after a window opened"
+   "measured": "762 frames while idle, 825 a second after a window opened"
   },
   {
    "pass": true,
    "check": "a still window on screen: the pass goes quiet again",
-   "measured": "866 frames, then 866 two seconds later"
+   "measured": "869 frames, then 869 two seconds later"
   },
   {
    "pass": true,
-   "check": "the failure was caught, logged, and the compositor still answers",
+   "check": "a failure mid-frame is caught and logged, and the compositor still answers",
    "measured": "DEAD, passing frames through untouched: injected failure, mid-frame, textures mapped"
   },
   {
    "pass": true,
    "check": "after the failure the frame is the untouched picture",
-   "measured": "identical to the frame with the pass off"
+   "measured": "byte-identical to the frame with the pass off"
+  },
+  {
+   "pass": true,
+   "check": "the plugin unloads and the compositor keeps answering",
+   "measured": ""
+  },
+  {
+   "pass": true,
+   "check": "the phosphor is the window's own size and place, at this monitor's 1.6 scale",
+   "measured": "plugin: 2490x1530 at 35,35; the window: 2490x1530 at 35,35"
+  },
+  {
+   "pass": true,
+   "check": "not one pixel outside the window changed",
+   "measured": "0 of 286300 outside pixels differ"
+  },
+  {
+   "pass": true,
+   "check": "inside the window the picture did change (the check above is not vacuous)",
+   "measured": "3784740 of 3809700 inside pixels differ (99.3%)"
+  },
+  {
+   "pass": true,
+   "check": "the other monitor (rotated, no target on it) is byte-identical",
+   "measured": "1920x1080"
+  },
+  {
+   "pass": true,
+   "check": "with the window still, the pass goes quiet",
+   "measured": "665 frames, then 665 two seconds later"
+  },
+  {
+   "pass": true,
+   "check": "when its time is up the pass stands down by itself and stops",
+   "measured": "stood down: its time was up"
+  },
+  {
+   "pass": true,
+   "check": "and the picture is byte-identical to the one with the pass off",
+   "measured": ""
   },
   {
    "pass": true,
    "check": "the plugin unloads and the compositor keeps answering",
    "measured": ""
   }
- ],
- "log": [
-  "CUDA device that owns this GL context: 0",
-  "ready: NVIDIA GeForce RTX 3080 Laptop GPU, CUDA driver API 13.4, NVRTC 12.9, GL OpenGL ES 3.2 NVIDIA 615.78.08",
-  "surface 1920x1080: two GLES textures registered with CUDA, half-precision state allocated",
-  "DEAD, passing frames through untouched: injected failure, mid-frame, textures mapped"
  ]
 }

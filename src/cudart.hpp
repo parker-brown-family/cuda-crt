@@ -3,6 +3,7 @@
 #pragma once
 #include <cuda.h>
 #include <nvrtc.h>
+#include <sys/stat.h>
 #include <cstdio>
 #include <cstdlib>
 #include <fstream>
@@ -24,10 +25,19 @@ inline std::string cu_err(CUresult r) {
             throw std::runtime_error(std::string(#call) + " -> " + cu_err(_r));               \
     } while (0)
 
+inline std::string slurp_or_empty(const std::string &path) {
+    std::ifstream f(path, std::ios::binary);
+    if (!f) return "";
+    std::stringstream ss;
+    ss << f.rdbuf();
+    return ss.str();
+}
+
 struct Cuda {
     CUdevice dev{};
     CUcontext ctx{};
     std::vector<CUmodule> mods;
+    int compiled = 0;  // how many kernel files had to be compiled this run (0 = all came from the cache)
     std::string device_name, nvrtc_version, driver_version;
     int sm_major = 0, sm_minor = 0;
 
@@ -61,24 +71,42 @@ struct Cuda {
         int maj = 0, min = 0;
         nvrtcVersion(&maj, &min);
         nvrtc_version = std::to_string(maj) + "." + std::to_string(min);
-        nvrtcProgram prog;
-        if (nvrtcCreateProgram(&prog, src.c_str(), path.c_str(), 0, nullptr, nullptr) != NVRTC_SUCCESS)
-            throw std::runtime_error("nvrtcCreateProgram failed");
         std::string arch = "--gpu-architecture=compute_" + std::to_string(sm_major) + std::to_string(sm_minor);
         std::string inc = "-I" + incdir;
-        const char *opts[] = {arch.c_str(), inc.c_str(), "--std=c++17", fast ? "--use_fast_math" : "--fmad=false"};
-        nvrtcResult r = nvrtcCompileProgram(prog, 4, opts);
-        size_t logn = 0;
-        nvrtcGetProgramLogSize(prog, &logn);
-        std::string log(logn, '\0');
-        nvrtcGetProgramLog(prog, log.data());
-        if (r != NVRTC_SUCCESS) throw std::runtime_error("NVRTC compile failed:\n" + log);
-        if (logn > 2) fprintf(stderr, "nvrtc: %s\n", log.c_str());
-        size_t n = 0;
-        nvrtcGetPTXSize(prog, &n);
-        std::string ptx(n, '\0');
-        nvrtcGetPTX(prog, ptx.data());
-        nvrtcDestroyProgram(&prog);
+        const char *mode = fast ? "--use_fast_math" : "--fmad=false";
+        // Compiled kernels are kept beside the lab (out/ptx/), named by a hash of every
+        // input that could change them, so a later start loads in milliseconds. A
+        // compositor plugin relies on this: it must never stall a frame on a compile.
+        std::string key = src + "\n" + slurp_or_empty(incdir + "/phosphor_params.h") + slurp_or_empty(incdir + "/phosphor_half.h") + arch + mode + nvrtc_version;
+        unsigned long long h = 1469598103934665603ull;
+        for (unsigned char c : key) { h ^= c; h *= 1099511628211ull; }
+        char name[64];
+        snprintf(name, sizeof name, "/out/ptx/%016llx.ptx", h);
+        std::string cache = incdir + name, ptx = slurp_or_empty(cache);
+        if (ptx.empty()) {
+            nvrtcProgram prog;
+            if (nvrtcCreateProgram(&prog, src.c_str(), path.c_str(), 0, nullptr, nullptr) != NVRTC_SUCCESS)
+                throw std::runtime_error("nvrtcCreateProgram failed");
+            const char *opts[] = {arch.c_str(), inc.c_str(), "--std=c++17", mode};
+            nvrtcResult r = nvrtcCompileProgram(prog, 4, opts);
+            size_t logn = 0;
+            nvrtcGetProgramLogSize(prog, &logn);
+            std::string log(logn, '\0');
+            nvrtcGetProgramLog(prog, log.data());
+            if (r != NVRTC_SUCCESS) throw std::runtime_error("NVRTC compile failed:\n" + log);
+            if (logn > 2) fprintf(stderr, "nvrtc: %s\n", log.c_str());
+            size_t n = 0;
+            nvrtcGetPTXSize(prog, &n);
+            ptx.assign(n, '\0');
+            nvrtcGetPTX(prog, ptx.data());
+            nvrtcDestroyProgram(&prog);
+            compiled++;
+            // best effort: on a read-only tree this fails quietly and the next run compiles again
+            mkdir((incdir + "/out").c_str(), 0755);
+            mkdir((incdir + "/out/ptx").c_str(), 0755);
+            std::ofstream o(cache + ".tmp", std::ios::binary);
+            if (o && o.write(ptx.data(), ptx.size()) && (o.close(), true)) rename((cache + ".tmp").c_str(), cache.c_str());
+        }
         CUmodule mod;
         CU(cuModuleLoadDataEx(&mod, ptx.c_str(), 0, nullptr, nullptr));
         mods.push_back(mod);

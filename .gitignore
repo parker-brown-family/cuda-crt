@@ -11,3 +11,7 @@ out/knobs.json
 out/.knobs.json.*
 reports/
 out/hypr/5-*.png
+out/ptx/
+out/hypr/*.png
+!out/hypr/a1-without-the-pass.png
+!out/hypr/a2-with-the-pass.png

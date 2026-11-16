@@ -6,13 +6,19 @@ Wayland socket (native/sandbox), with a headless Hyprland started inside it
 (native/rig/up). Point OMARCHY_CRT at a checkout of that repository. Nothing here
 can reach a live desktop.
 
-Checks, in order:
-  1. the plugin loads and CUDA shares this compositor's own GLES textures
-  2. the picture changes: the frame with the pass differs from the frame without
-  3. what a frame costs in here (wall time, GPU finished either side)
-  4. an empty desk goes quiet; a window appearing wakes the pass; a still window goes quiet again
-  5. a failure injected mid-frame leaves the compositor answering and the picture untouched
-  6. the plugin unloads and the compositor keeps answering
+Two scenes.
+
+A. The whole monitor as one tube, the lab's own glass:
+   CUDA shares the compositor's textures; the picture changes; what a pass costs;
+   an empty desk goes quiet, a window wakes it, a still window goes quiet again;
+   a failure mid-frame leaves the compositor answering and the picture untouched;
+   the plugin unloads.
+
+B. ONE window, phosphor only, on a two-monitor desk (a 2560x1600 panel at scale
+   1.6 and a rotated 1080p beside it):
+   the phosphor is exactly the window's size and place; not one pixel outside the
+   window changes; the other monitor is untouched; the pass goes quiet; and when
+   its time is up it stands down by itself and the picture is the plain one again.
 """
 import json, os, signal, struct, subprocess, sys, time, zlib
 
@@ -20,9 +26,12 @@ S, OUT = os.path.abspath(sys.argv[1]), os.path.abspath(sys.argv[2])
 HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 OMA = os.environ.get("OMARCHY_CRT", os.path.expanduser("~/Work/omarchy-crt"))
 HOME = S + "/home"
+FL = HOME + "/.state/cuda-crt"   # the plugin's one folder: the seat sets XDG_STATE_HOME to $HOME/.state
 os.makedirs(OUT, exist_ok=True)
 fails = 0
 results = []
+clients = []
+SWITCHES = ("off", "ttl", "fail", "keep-drawing", "time-pass", "dump-now", "target", "look")
 
 
 def verdict(ok, text, measured=""):
@@ -36,12 +45,13 @@ def seat(*cmd, timeout=8):
     return subprocess.run([S + "/in", *cmd], capture_output=True, text=True, timeout=timeout)
 
 
-def flag(name, on=True):
-    p = f"{HOME}/{name}"
-    if on:
-        open(p, "w").close()
-    elif os.path.exists(p):
-        os.unlink(p)
+def put(name, text=""):
+    open(f"{FL}/{name}", "w").write(text)
+
+
+def drop(name):
+    if os.path.exists(f"{FL}/{name}"):
+        os.unlink(f"{FL}/{name}")
 
 
 def alive():
@@ -51,22 +61,22 @@ def alive():
         return False
 
 
-def shot(name):
-    """Ask the plugin for the finished frame; returns (w, h, bytes) and writes a PNG."""
+def shot(name, monitor=""):
+    """Ask the plugin for one monitor's finished frame; returns (w, h, bytes) and writes a PNG."""
     for f in ("frame.rgba", "frame.txt"):
-        if os.path.exists(f"{HOME}/{f}"):
-            os.unlink(f"{HOME}/{f}")
-    flag("dump-now")
+        drop(f)
+    put("dump-now", monitor)
     for _ in range(120):
-        if os.path.exists(f"{HOME}/frame.txt") and not os.path.exists(f"{HOME}/dump-now"):
+        if os.path.exists(f"{FL}/frame.txt") and not os.path.exists(f"{FL}/dump-now"):
             break
         time.sleep(0.05)
     else:
+        drop("dump-now")
         return None
     time.sleep(0.1)
-    meta = open(f"{HOME}/frame.txt").read().split()
+    meta = open(f"{FL}/frame.txt").read().split()
     w, h = int(meta[0]), int(meta[1])
-    px = open(f"{HOME}/frame.rgba", "rb").read()
+    px = open(f"{FL}/frame.rgba", "rb").read()
     raw = b"".join(b"\0" + px[y * w * 4:(y + 1) * w * 4] for y in range(h))
     ch = lambda t, d: struct.pack(">I", len(d)) + t + d + struct.pack(">I", zlib.crc32(t + d))
     open(f"{OUT}/{name}.png", "wb").write(b"\x89PNG\r\n\x1a\n" + ch(b"IHDR", struct.pack(">IIBBBBB", w, h, 8, 6, 0, 0, 0)) + ch(b"IDAT", zlib.compress(raw, 3)) + ch(b"IEND", b""))
@@ -75,45 +85,53 @@ def shot(name):
 
 def frames():
     try:
-        return int(open(f"{HOME}/cuda-frames.now").read().split()[0])
+        return int(open(f"{FL}/frames.now").read().split()[0])
     except (OSError, ValueError, IndexError):
         return None
 
 
 def log():
     try:
-        return open(f"{HOME}/cuda-pass.log").read()
+        return open(f"{FL}/pass.log").read()
     except OSError:
         return ""
 
 
 def differ(a, b):
+    """Fraction of sampled pixels that differ anywhere in the frame."""
     return sum(1 for i in range(0, len(a), 4 * 97) if a[i:i + 3] != b[i:i + 3]) / max(1, len(a) // (4 * 97))
 
 
-print("building the plugin and starting the sealed seat")
-os.makedirs(HOME, exist_ok=True)
-for f in ("cuda-pass.log", "cuda-pass-ms.txt", "cuda-frames.now", "cuda-off", "cuda-fail", "still-glass", "keep-drawing", "time-pass", "dump-now"):
-    flag(f, False)
-subprocess.run([HERE + "/hypr/build", HOME + "/cuda-pass.so"], check=True, stdout=subprocess.DEVNULL)
-subprocess.run([OMA + "/native/rig/up", S], check=True, env={**os.environ, "CRT_SEAT": os.environ.get("CRT_SEAT", "HEADLESS-1 1920x1080@60 1 0 0 0")})
-open(HOME + "/cuda-crt-root", "w").write(HERE + "\n")
-subprocess.run(["rm", "-rf", HOME + "/cuda-client"]); subprocess.run(["cp", "-r", HERE + "/hypr/client", HOME + "/cuda-client"], check=True)
-clients = []
+def count_diff(a, b, w, h, rect, inside):
+    """How many pixels differ inside (or outside) rect = (x, y, rw, rh). Every pixel is looked at."""
+    x0, y0, rw, rh = rect
+    n = 0
+    for y in range(h):
+        row_a, row_b = a[y * w * 4:(y + 1) * w * 4], b[y * w * 4:(y + 1) * w * 4]
+        if row_a == row_b:
+            continue
+        in_rows = y0 <= y < y0 + rh
+        if inside and not in_rows:
+            continue
+        for x in range(w):
+            if row_a[x * 4:x * 4 + 3] != row_b[x * 4:x * 4 + 3]:
+                hit = in_rows and x0 <= x < x0 + rw
+                n += 1 if hit == inside else 0
+    return n
 
 
 def windows():
-    return seat("hyprctl", "clients", "-j").stdout.count('"class"')
+    return json.loads(seat("hyprctl", "clients", "-j").stdout or "[]")
 
 
 def start_client(name):
     """term = text that types itself; still = the same text, complete, nothing moving."""
-    want = windows() + 1
+    want = len(windows()) + 1
     c = subprocess.Popen([S + "/in", "env", "QT_QPA_PLATFORM=wayland", "QS_NO_RELOAD_POPUP=1", "quickshell", "-p", f"{HOME}/cuda-client/{name}.qml"],
                          stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
     clients.append(c)
     for _ in range(60):
-        if windows() >= want:
+        if len(windows()) >= want:
             break
         time.sleep(0.25)
     return c
@@ -128,74 +146,146 @@ def stop_clients():
             pass
     clients.clear()
     for _ in range(40):
-        if windows() == 0:
+        if not windows():
             return True
         time.sleep(0.25)
     return False
 
 
-start_client("term")
-try:
-    # the frame WITHOUT the pass, for comparison (the pass is off before the plugin even loads)
-    flag("cuda-off"); flag("keep-drawing")
-    loaded = seat("hyprctl", "plugin", "load", HOME + "/cuda-pass.so").stdout.strip().splitlines()[-1:]
-    print("  plugin load:", loaded)
-    time.sleep(1.5)
-    plain = shot("1-without-the-pass")
-    flag("cuda-off", False)
-    time.sleep(2.5)
-    print("1. CUDA inside the compositor")
-    l = log()
-    verdict("ready:" in l and "registered with CUDA" in l and "DEAD" not in l, "the plugin initialised CUDA and registered the compositor's GLES textures",
-            (l.strip().splitlines() or ["no log"])[-1][:150])
-    print("2. the picture")
-    time.sleep(3.0)
-    crt = shot("2-with-the-pass")
-    d = differ(plain[2], crt[2]) if plain and crt else 0
-    verdict(plain is not None and crt is not None and d > 0.2, "the frame through the pass differs from the frame without it", f"{100 * d:.0f}% of sampled pixels differ, {crt[0]}x{crt[1]}" if crt else "no frame")
-    print("3. what a frame costs in here")
-    flag("time-pass"); time.sleep(4.0); flag("time-pass", False)
-    try:
-        avg, mx, n, size = open(f"{HOME}/cuda-pass-ms.txt").read().split()
-        verdict(float(avg) < 3.0, "whole pass, wall clock with the GPU finished either side (copy in, map, three kernels, unmap, copy back)", f"mean {float(avg):.2f} ms, worst {float(mx):.2f} ms over {n} frames at {size}")
-    except (OSError, ValueError):
-        verdict(False, "pass timing was written", "no cuda-pass-ms.txt")
-    print("4. idle")
-    gone = stop_clients()
-    flag("still-glass"); flag("keep-drawing", False)
-    time.sleep(6.0)  # the ghost drains in about three seconds
-    a = frames(); time.sleep(2.0); b = frames()
-    verdict(gone and a is not None and a == b, "an empty desk, glass still: the pass stops being asked for frames", f"{a} frames, then {b} two seconds later")
-    # An idle compositor draws nothing, so nothing would ever read a switch: a window
-    # appearing is what wakes it, exactly as on a real desk.
-    start_client("still")
-    time.sleep(1.0)
-    woke = frames()
-    verdict(woke is not None and b is not None and woke > b, "a window appearing wakes the pass", f"{b} frames while idle, {woke} a second after a window opened")
-    time.sleep(7.0)  # its text charges the ghost for a couple of seconds, then everything settles
-    c1 = frames(); time.sleep(2.0); c2 = frames()
-    verdict(c1 is not None and c1 == c2, "a still window on screen: the pass goes quiet again", f"{c1} frames, then {c2} two seconds later")
-    flag("keep-drawing")
-    start_client("still")  # a second window, to wake the seat so the switch above is read
-    time.sleep(1.5)
-    print("5. a failure mid-frame")
-    flag("cuda-fail"); time.sleep(1.5)
-    l = log()
-    ok_alive = alive()
-    after_fail = shot("5-after-the-failure")
-    flag("cuda-off"); time.sleep(0.6)
-    plain2 = shot("5-plain-for-comparison")
-    same = after_fail is not None and plain2 is not None and differ(after_fail[2], plain2[2]) < 0.002
-    verdict("DEAD" in l and ok_alive, "the failure was caught, logged, and the compositor still answers", (l.strip().splitlines() or [""])[-1][:120])
-    verdict(same, "after the failure the frame is the untouched picture", "identical to the frame with the pass off" if same else "differs from the plain frame")
-    print("6. unload")
-    seat("hyprctl", "plugin", "unload", HOME + "/cuda-pass.so")
-    time.sleep(1.0)
-    verdict(alive(), "the plugin unloads and the compositor keeps answering")
-finally:
+def up(layout):
+    """A fresh sealed seat with the plugin built, its folder empty of switches, and the lab's path written."""
+    os.makedirs(HOME, exist_ok=True)
+    subprocess.run([HERE + "/hypr/build", HOME + "/cuda-pass.so"], check=True, stdout=subprocess.DEVNULL)
+    subprocess.run([OMA + "/native/rig/up", S], check=True, env={**os.environ, "CRT_SEAT": layout})
+    os.makedirs(FL, exist_ok=True)
+    for f in os.listdir(FL):
+        os.unlink(f"{FL}/{f}")
+    put("root", HERE + "\n")
+    subprocess.run(["rm", "-rf", HOME + "/cuda-client"])
+    subprocess.run(["cp", "-r", HERE + "/hypr/client", HOME + "/cuda-client"], check=True)
+
+
+def down():
     stop_clients()
     subprocess.run(["pkill", "-f", "[H]yprland --config " + HOME], check=False)
-    time.sleep(0.5)
-json.dump({"failed": fails, "checks": results, "log": log().strip().splitlines()}, open(f"{OUT}/hypr-proof.json", "w"), indent=1)
+    time.sleep(0.8)
+
+
+def scene_a():
+    print("A. the whole monitor as one tube")
+    up("HEADLESS-1 1920x1080@60 1 0 0 0")
+    start_client("term")
+    try:
+        put("off"); put("keep-drawing")   # the frame WITHOUT the pass first: it is off before the plugin loads
+        print("  plugin load:", seat("hyprctl", "plugin", "load", HOME + "/cuda-pass.so").stdout.strip().splitlines()[-1:])
+        time.sleep(1.5)
+        plain = shot("a1-without-the-pass")
+        drop("off")
+        time.sleep(2.5)
+        l = log()
+        verdict("ready:" in l and "registered with CUDA" in l and "DEAD" not in l, "the plugin initialised CUDA and registered the compositor's GLES textures",
+                next((x for x in l.splitlines() if x.startswith("ready:")), "no ready line")[:110])
+        time.sleep(3.0)
+        crt = shot("a2-with-the-pass")
+        d = differ(plain[2], crt[2]) if plain and crt else 0
+        verdict(plain is not None and crt is not None and d > 0.2, "the frame through the pass differs from the frame without it", f"{100 * d:.0f}% of sampled pixels differ, {crt[0]}x{crt[1]}" if crt else "no frame")
+        put("time-pass"); time.sleep(4.0); drop("time-pass")
+        try:
+            avg, mx, n, size = open(f"{FL}/pass-ms.txt").read().split()
+            verdict(float(avg) < 3.0, "whole pass, wall clock with the GPU finished either side (copy in, map, kernels, unmap, copy back)", f"mean {float(avg):.2f} ms, worst {float(mx):.2f} ms over {n} frames at {size}")
+        except (OSError, ValueError):
+            verdict(False, "pass timing was written", "no pass-ms.txt")
+        gone = stop_clients()
+        put("look", "phosphor"); drop("keep-drawing")   # nothing driven by a clock, so idle can be seen
+        time.sleep(6.0)
+        a = frames(); time.sleep(2.0); b = frames()
+        verdict(gone and a is not None and a == b, "an empty desk: the pass stops being asked for frames", f"{a} frames, then {b} two seconds later")
+        start_client("still")   # an idle compositor draws nothing; a window appearing is what wakes it
+        time.sleep(1.0)
+        woke = frames()
+        verdict(woke is not None and b is not None and woke > b, "a window appearing wakes the pass", f"{b} frames while idle, {woke} a second after a window opened")
+        time.sleep(7.0)
+        c1 = frames(); time.sleep(2.0); c2 = frames()
+        verdict(c1 is not None and c1 == c2, "a still window on screen: the pass goes quiet again", f"{c1} frames, then {c2} two seconds later")
+        put("keep-drawing")
+        start_client("still")   # a second window, to wake the seat so the switch above is read
+        time.sleep(1.5)
+        put("fail"); time.sleep(1.5)
+        l = log()
+        ok_alive = alive()
+        after_fail = shot("a5-after-the-failure")
+        put("off"); time.sleep(0.6)
+        plain2 = shot("a5-plain-for-comparison")
+        same = after_fail is not None and plain2 is not None and after_fail[2] == plain2[2]
+        verdict("DEAD" in l and ok_alive, "a failure mid-frame is caught and logged, and the compositor still answers", (l.strip().splitlines() or [""])[-1][:110])
+        verdict(same, "after the failure the frame is the untouched picture", "byte-identical to the frame with the pass off" if same else "differs from the plain frame")
+        seat("hyprctl", "plugin", "unload", HOME + "/cuda-pass.so")
+        time.sleep(1.0)
+        verdict(alive(), "the plugin unloads and the compositor keeps answering")
+    finally:
+        down()
+
+
+def scene_b():
+    print("B. one window, phosphor only, on a two-monitor desk")
+    up("HEADLESS-1 2560x1600@60 1.6 0 0 0\nHEADLESS-2 1920x1080@60 1 3 1600 0")
+    start_client("still")
+    try:
+        put("target", "title:still"); put("look", "phosphor"); put("off"); put("keep-drawing")
+        print("  plugin load:", seat("hyprctl", "plugin", "load", HOME + "/cuda-pass.so").stdout.strip().splitlines()[-1:])
+        time.sleep(1.5)
+        plain1, plain2 = shot("b1-panel-without", "HEADLESS-1"), shot("b1-side-without", "HEADLESS-2")
+        drop("off")
+        time.sleep(5.0)   # init, then the burn ghost charges and settles on a still window
+        win = next((c for c in windows() if c.get("title") == "still"), None)
+        l = log()
+        # the log line reads: phosphor WxH at X,Y on a FWxFH framebuffer
+        ph = next((x for x in l.splitlines() if x.startswith("phosphor ")), "")
+        try:
+            size, _, at = ph.split()[1], ph.split()[2], ph.split()[3]
+            pw, phh = (int(v) for v in size.split("x")); px0, py0 = (int(v) for v in at.split(","))
+        except (IndexError, ValueError):
+            pw = phh = px0 = py0 = -1
+        want = [round(win["at"][0] * 1.6), round(win["at"][1] * 1.6), round(win["size"][0] * 1.6), round(win["size"][1] * 1.6)] if win else None
+        close = want is not None and all(abs(a - b) <= 1 for a, b in zip((px0, py0, pw, phh), want))
+        verdict("ready:" in l and "DEAD" not in l and close, "the phosphor is the window's own size and place, at this monitor's 1.6 scale", f"plugin: {pw}x{phh} at {px0},{py0}; the window: {want[2]}x{want[3]} at {want[0]},{want[1]}" if want else "window not found")
+        with1, with2 = shot("b2-panel-with", "HEADLESS-1"), shot("b2-side-with", "HEADLESS-2")
+        if plain1 and with1 and pw > 0:
+            w, h = with1[0], with1[1]
+            outside = count_diff(plain1[2], with1[2], w, h, (px0, py0, pw, phh), inside=False)
+            inside = count_diff(plain1[2], with1[2], w, h, (px0, py0, pw, phh), inside=True)
+            verdict(outside == 0, "not one pixel outside the window changed", f"{outside} of {w * h - pw * phh} outside pixels differ")
+            verdict(inside > 0, "inside the window the picture did change (the check above is not vacuous)", f"{inside} of {pw * phh} inside pixels differ ({100 * inside / (pw * phh):.1f}%)")
+        else:
+            verdict(False, "frames were captured for the window comparison")
+        verdict(plain2 is not None and with2 is not None and plain2[2] == with2[2], "the other monitor (rotated, no target on it) is byte-identical", f"{with2[0]}x{with2[1]}" if with2 else "no frame")
+        drop("keep-drawing"); time.sleep(5.0)
+        a = frames(); time.sleep(2.0); b = frames()
+        verdict(a is not None and a == b, "with the window still, the pass goes quiet", f"{a} frames, then {b} two seconds later")
+        # its time is up: it must stand down by itself and leave the plain picture
+        put("ttl", "1"); put("keep-drawing")
+        start_client("term")   # wake the seat so the switches are read
+        time.sleep(2.5)
+        stop_clients(); start_client("still"); time.sleep(1.5)
+        l = log()
+        after = shot("b6-panel-after-time-up", "HEADLESS-1")
+        fa = frames(); time.sleep(1.5); fb = frames()
+        verdict("its time was up" in l and fa == fb, "when its time is up the pass stands down by itself and stops", (l.strip().splitlines() or [""])[-1][:80])
+        put("off"); time.sleep(0.5)
+        plain_again = shot("b6-panel-plain-again", "HEADLESS-1")
+        verdict(after is not None and plain_again is not None and after[2] == plain_again[2], "and the picture is byte-identical to the one with the pass off")
+        seat("hyprctl", "plugin", "unload", HOME + "/cuda-pass.so")
+        time.sleep(1.0)
+        verdict(alive(), "the plugin unloads and the compositor keeps answering")
+    finally:
+        down()
+
+
+which = sys.argv[3] if len(sys.argv) > 3 else "ab"
+if "a" in which:
+    scene_a()
+if "b" in which:
+    scene_b()
+json.dump({"failed": fails, "checks": results}, open(f"{OUT}/hypr-proof.json", "w"), indent=1)
 print("all checks passed" if not fails else f"{fails} FAILED")
 sys.exit(1 if fails else 0)

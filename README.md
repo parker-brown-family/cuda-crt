@@ -23,7 +23,7 @@ EGL context and installs nothing outside this folder.
 | `existing` | the shipped omarchy-crt glass shader, unmodified (`baseline/`): one pass, no memory |
 | `glsl` | phosphor state + glass as fragment shaders (`shaders/`), the matched comparison |
 | `cuda` | first pass: the same phosphor and glass as CUDA kernels |
-| `cuda2` | second pass: half-precision state, halation, an afterglow ghost, swelling strokes, a power-on degauss, an optional aperture mask |
+| `cuda2` | second pass: half-precision state, halation, a phosphor burn ghost, swelling strokes, a power-on degauss, an optional aperture mask |
 | vector mode | no input picture: a beam's strokes deposit light straight into the phosphor |
 
 ## Build
@@ -77,6 +77,16 @@ closes it, `f` is fullscreen; `--dry` runs every act with no window):
 tools/demo.sh
 ```
 
+One live tube with a panel of sliders beside it. Every move shows on the next
+frame: the ghost's strength and linger, each colour's fade, barrel warp,
+scanlines, the tracking bar and how hard it disturbs the picture, jiggle,
+flicker, and phosphor presets (`q` closes it; `--dry 1` proves the pipeline
+with no window):
+
+```bash
+tools/tube.sh
+```
+
 Any video in, CRT video out:
 
 ```bash
@@ -92,13 +102,18 @@ bin/crt_render . --size 1280x720 --fps 60 --vector lissajous --frames 480 --deca
 ## Dials
 
 `--decay r,g,b` and `--rise` are the phosphor's time constants in milliseconds
-(one value sets all three). `--burn rise,decay` sets the afterglow's. They are
+(one value sets all three). `--burn rise,decay` sets the ghost's. They are
 values for the eye, not measured from a real tube.
+
+`bin/crt_render . --dials` prints every dial with its range as JSON
+(`tools/dials.json` is that output; `tools/presets.json` holds the presets).
+`--knobs FILE` re-reads a file of values whenever it changes, which is how the
+slider panel drives a running window.
 
 `--set name=value,...` reaches the rest: `curv scan scan_step glow glow_px bloom
 vign specular glare tracking track_rest track_sweep band_h flicker aberr k1 k2`
-for the glass, and for the second pass `halation afterglow beam mask
-degauss_at`. `--tiles "x,y,w,h;x,y,w,h"` gives each rectangle its own phosphor;
+for the glass, and for the second pass `ghost ghost_decay ghost_rise halation
+beam mask track_bend track_noise track_chroma jiggle degauss_at`. `--tiles "x,y,w,h;x,y,w,h"` gives each rectangle its own phosphor;
 the rest of the frame passes through.
 
 ## Where it runs

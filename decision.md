@@ -43,11 +43,11 @@ Second pass, measured the same way (p95 GPU time, 600 frames, full clock):
   arithmetic for pixels deep inside the glass. Half precision alone gave 20%; an A/B
   of the glass kernel with one part removed at a time found the rest.
 - "All effects" adds a halation glow (three small kernels on a 1/8-size image), an
-  afterglow ghost (a slow second light term in the state's fourth channel), bright
+  phosphor burn ghost (a slow second light term in the state's fourth channel), bright
   strokes that swell, and a degauss at switch-on. There is no matched shader for
   these; the comparison question was settled in the first pass.
 - Power is as before: 1545 MHz and 38 W for as long as kernels run
-  (`out/clock_samples_v2.csv`). With the afterglow on, a tile stays active for about
+  (`out/clock_samples_v2.csv`). With the ghost on, a tile stays active for about
   3 s after a change (0.43 s in the first pass), by design.
 - One honest comparison this does not make: a shader storing half precision timed
   0.173 ms at 1080p in the first pass, with its idle behaviour unproven. A shader

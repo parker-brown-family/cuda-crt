@@ -56,6 +56,14 @@ typedef struct OpticsParams {
     float beam;          /* bright strokes swell: spill weighted by light   */
     float degauss;       /* 0 = none; 1 fading to 0 over a second at power-on */
     float degauss_phase; /* radians, advances with time                     */
+    /* the tracking bar as a disturbance: while it passes, the picture under it
+     * bends sideways, tears a little line by line, splits its colours and
+     * picks up static. All zero = the plain brightening band of the first pass. */
+    float track_bend;    /* px the picture is pushed sideways at the bar's centre */
+    float track_noise;   /* 0..1 line tearing and static inside the bar      */
+    float track_chroma;  /* extra colour split inside the bar                */
+    float jiggle_px;     /* this frame's vertical hop of the picture, in px  */
+    float seed;          /* changes every frame; drives the static           */
 } OpticsParams;
 
 #endif

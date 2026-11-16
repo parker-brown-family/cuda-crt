@@ -13,11 +13,15 @@
 //                             straight into the phosphor (reads nothing from stdin)
 // --tiles "x,y,w,h;x,y,w,h"   one phosphor surface per tile (default: the whole frame)
 // --decay r,g,b   --rise ms   phosphor time constants in milliseconds
-// --set name=value,...        any dial in Look (curv, scan, glare, tracking, track_rest, ...)
+// --set name=value,...        any dial (`--dials` lists them: ghost, curv, scan, tracking, jiggle, ...)
+// --knobs FILE                re-read FILE whenever it changes and apply its {"values": {...}};
+//                             this is how the slider panel (tools/knobs.py) drives a live window
+// --dials                     print every dial as JSON (name, range, default) and exit
 // If the CUDA path fails at any point the frame goes through untouched and the
 // reason is printed once: a broken backend must never cost the picture.
 #include "pipelines.hpp"
 #include <map>
+#include <sys/stat.h>
 #include <unistd.h>
 
 struct Rect { int x, y, w, h; };
@@ -49,30 +53,97 @@ int main(int argc, char **argv) {
     Look look;
     look.track_rest = 2.0f; look.track_sweep = 5.0f;  // clips are short: let the band be seen
     std::vector<Rect> tiles;
-    std::map<std::string, float *> dials = {
-        {"curv", &look.curv}, {"k1", &look.k1}, {"k2", &look.k2}, {"aberr", &look.aberr}, {"scan", &look.scan},
-        {"scan_step", &look.scan_step}, {"glow", &look.glow}, {"glow_px", &look.glow_px}, {"bloom", &look.bloom},
-        {"vign", &look.vign}, {"specular", &look.specular}, {"glare", &look.glare}, {"tracking", &look.tracking},
-        {"track_rest", &look.track_rest}, {"track_sweep", &look.track_sweep}, {"band_h", &look.band_h}, {"flicker", &look.flicker},
-        {"burn", &look.burn.gain}, {"afterglow", &look.burn.gain}, {"halation", &look.halation}, {"mask", &look.mask},
-        {"glow_knee", &look.glow_knee}, {"beam", &look.beam}, {"degauss_at", &look.degauss_at}};
+    // Time constants are kept here in milliseconds, the unit a person turns, and
+    // copied into the look whenever they change (sync_ms).
+    float decay_ms[3] = {50, 50, 50}, rise_ms = 1, ghost_rise_ms = 500, ghost_decay_ms = 800;
+    auto sync_ms = [&] {
+        for (int c = 0; c < 3; c++) look.phosphor.tau_decay[c] = std::max(0.2f, decay_ms[c]) / 1000.0;
+        look.phosphor.tau_rise = std::max(0.05f, rise_ms) / 1000.0;
+        look.burn.tau_rise = std::max(1.0f, ghost_rise_ms) / 1000.0;
+        look.burn.tau_decay = std::max(1.0f, ghost_decay_ms) / 1000.0;
+    };
+    // Every dial a person can turn: name, where it lives, and how the slider panel should show it.
+    struct Dial { const char *name; float *v; const char *label, *group; float lo, hi, step; const char *unit, *help; };
+    const std::vector<Dial> table = {
+        {"ghost", &look.burn.gain, "Phosphor burn ghost", "Phosphor", 0, 0.03f, 0.0005f, "", "How strongly the last screen lingers. 0 is none."},
+        {"ghost_decay", &ghost_decay_ms, "Ghost linger", "Phosphor", 100, 5000, 50, "ms", "How long the ghost takes to drain"},
+        {"ghost_rise", &ghost_rise_ms, "Ghost charge time", "Phosphor", 50, 3000, 50, "ms", "How long something must sit before it leaves a ghost"},
+        {"decay_g", &decay_ms[1], "Green fade", "Phosphor", 1, 400, 1, "ms", "How long green light takes to fade"},
+        {"decay_r", &decay_ms[0], "Red fade", "Phosphor", 1, 400, 1, "ms", "How long red light takes to fade"},
+        {"decay_b", &decay_ms[2], "Blue fade", "Phosphor", 1, 400, 1, "ms", "How long blue light takes to fade"},
+        {"rise", &rise_ms, "Rise", "Phosphor", 0.2f, 30, 0.2f, "ms", "How fast a new letter reaches full brightness"},
+        {"halation", &look.halation, "Halation glow", "Phosphor", 0, 1, 0.01f, "", "Soft glow around lit text"},
+        {"beam", &look.beam, "Beam swell", "Phosphor", 0, 2, 0.02f, "", "Bright strokes spread wider than dim ones"},
+        {"curv", &look.curv, "Barrel warp", "Tube", 0, 3, 0.02f, "", "How far the glass bows"},
+        {"scan", &look.scan, "Scanline depth", "Tube", 0, 0.6f, 0.01f, "", "How dark the lines between rows are"},
+        {"scan_step", &look.scan_step, "Scanline pitch", "Tube", 2, 8, 1, "px", "Pixels between scanlines"},
+        {"mask", &look.mask, "Aperture grille", "Tube", 0, 0.6f, 0.01f, "", "Vertical red, green and blue stripes"},
+        {"aberr", &look.aberr, "Colour split at the rim", "Tube", 0, 3, 0.05f, "", "Red and blue part company toward the edges"},
+        {"glare", &look.glare, "Glass glare", "Tube", 0, 1, 0.01f, "", "The room's light on the glass"},
+        {"specular", &look.specular, "Corner highlight", "Tube", 0, 1, 0.01f, "", "A small bright catch, upper left"},
+        {"vign", &look.vign, "Corner falloff", "Tube", 0, 1, 0.01f, "", "Darker toward the corners"},
+        {"bloom", &look.bloom, "Centre wash", "Tube", 0, 1, 0.01f, "", "A faint tint of the tube's colour"},
+        {"glow", &look.glow, "Tight glow", "Tube", 0, 1, 0.01f, "", "A two-pixel glow on every stroke"},
+        {"tracking", &look.tracking, "Tracking bar", "Motion", 0, 1, 0.01f, "", "Strength of the bar that rolls down the screen"},
+        {"track_bend", &look.track_bend, "Bar bends the picture", "Motion", 0, 40, 0.5f, "px", "How far the bar pushes the picture sideways"},
+        {"track_noise", &look.track_noise, "Bar static and tearing", "Motion", 0, 1, 0.01f, "", "Line tearing and static inside the bar"},
+        {"track_chroma", &look.track_chroma, "Bar colour split", "Motion", 0, 3, 0.05f, "", "Colours part company inside the bar"},
+        {"band_h", &look.band_h, "Bar height", "Motion", 40, 600, 4, "px", "How tall the bar is"},
+        {"track_sweep", &look.track_sweep, "Seconds per pass", "Motion", 1, 20, 0.5f, "s", "How long the bar takes to cross"},
+        {"track_rest", &look.track_rest, "Seconds between passes", "Motion", 0, 30, 0.5f, "s", "Quiet time before the next bar"},
+        {"jiggle", &look.jiggle, "Screen jiggle", "Motion", 0, 1, 0.01f, "", "The picture breathes and now and then hops"},
+        {"flicker", &look.flicker, "Flicker", "Motion", 0, 1, 0.01f, "", "Occasional stepped dips in brightness"},
+    };
+    std::map<std::string, float *> dials = {{"k1", &look.k1}, {"k2", &look.k2}, {"glow_px", &look.glow_px}, {"glow_knee", &look.glow_knee},
+                                           {"degauss_at", &look.degauss_at}, {"burn", &look.burn.gain}, {"afterglow", &look.burn.gain}};
+    for (const Dial &d : table) dials[d.name] = d.v;
+    if (argc > 2 && std::string(argv[2]) == "--dials") {  // the table as JSON, for the slider panel
+        printf("[\n");
+        for (size_t i = 0; i < table.size(); i++) {
+            const Dial &d = table[i];
+            printf("  {\"name\": \"%s\", \"label\": \"%s\", \"group\": \"%s\", \"min\": %g, \"max\": %g, \"step\": %g, \"default\": %g, \"unit\": \"%s\", \"help\": \"%s\"}%s\n",
+                   d.name, d.label, d.group, d.lo, d.hi, d.step, *d.v, d.unit, d.help, i + 1 < table.size() ? "," : "");
+        }
+        printf("]\n");
+        return 0;
+    }
+    std::string knobs_path;
+    struct timespec knobs_mtime = {0, 0};
+    // Re-read the panel's file when it changes: {"values": {"name": number, ...}}. Unknown names
+    // are ignored and every value is clamped to its dial's range, whatever the file says.
+    auto load_knobs = [&] {
+        struct stat sb;
+        if (knobs_path.empty() || stat(knobs_path.c_str(), &sb) != 0) return;
+        if (sb.st_mtim.tv_sec == knobs_mtime.tv_sec && sb.st_mtim.tv_nsec == knobs_mtime.tv_nsec) return;
+        knobs_mtime = sb.st_mtim;
+        std::string j;
+        try { j = slurp(knobs_path); } catch (...) { return; }
+        size_t v = j.find("\"values\"");
+        if (v == std::string::npos) return;
+        static const std::regex pair("\"([a-z_0-9]+)\"\\s*:\\s*(-?[0-9.]+(?:[eE][-+]?[0-9]+)?)");
+        for (std::sregex_iterator it(j.begin() + v, j.end(), pair), end; it != end; ++it)
+            for (const Dial &d : table)
+                if ((*it)[1] == d.name) *d.v = std::min(d.hi, std::max(d.lo, (float)atof((*it)[2].str().c_str())));
+        sync_ms();
+    };
     for (int i = 2; i < argc; i++) {
         std::string a = argv[i], v = i + 1 < argc ? argv[i + 1] : "";
         if (a == "--size") { sscanf(v.c_str(), "%dx%d", &W, &H); i++; }
         else if (a == "--fps") { fps = atof(v.c_str()); i++; }
         else if (a == "--path") { path = v; i++; }
-        else if (a == "--rise") { look.phosphor.tau_rise = atof(v.c_str()) / 1000; i++; }
+        else if (a == "--knobs") { knobs_path = v; i++; }
+        else if (a == "--rise") { rise_ms = (float)atof(v.c_str()); i++; }
         else if (a == "--decay") {
             double r, g, b;
             int n = sscanf(v.c_str(), "%lf,%lf,%lf", &r, &g, &b);
             if (n == 1) g = b = r;
-            look.phosphor.tau_decay[0] = r / 1000; look.phosphor.tau_decay[1] = g / 1000; look.phosphor.tau_decay[2] = b / 1000; i++;
+            decay_ms[0] = (float)r; decay_ms[1] = (float)g; decay_ms[2] = (float)b; i++;
         } else if (a == "--vector") { vector_fig = v; path = "cuda2"; i++; }
         else if (a == "--frames") { vector_frames = atol(v.c_str()); i++; }
         else if (a == "--burn") {
             double r = 500, d = 800;
             sscanf(v.c_str(), "%lf,%lf", &r, &d);
-            look.burn.tau_rise = r / 1000; look.burn.tau_decay = d / 1000; i++;
+            ghost_rise_ms = (float)r; ghost_decay_ms = (float)d; i++;
         } else if (a == "--tiles") {
             const char *s = v.c_str();
             Rect r;
@@ -92,6 +163,7 @@ int main(int argc, char **argv) {
             i++;
         } else { fprintf(stderr, "unknown option %s\n", a.c_str()); return 2; }
     }
+    sync_ms();
     if (W <= 0 || H <= 0) { fprintf(stderr, "--size WxH is required\n"); return 2; }
     if (tiles.empty()) tiles.push_back({0, 0, W, H});
 
@@ -155,6 +227,7 @@ int main(int argc, char **argv) {
     };
     while (vector_fig.empty() ? read_all(in.data(), in.size()) : n < vector_frames) {
         float t = (float)(n * dt);
+        load_knobs();  // a slider moved: the very next frame shows it
         glBindTexture(GL_TEXTURE_2D, frame_tex);
         glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, W, H, GL_RGBA, GL_UNSIGNED_BYTE, in.data());
         bool active = false, drawn = false;

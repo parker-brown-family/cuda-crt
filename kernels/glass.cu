@@ -138,15 +138,31 @@ rim_done:;
     // degauss: for a second after power-on the PICTURE swims and its colours part,
     // while the glass (rim, scanlines, vignette) stays where it is
     float dg = o.degauss;
+    bool moved = false;
     if (dg > 0.0f) {
         l0.x += dg * 0.012f * sinf(o.degauss_phase + l0.y * 11.0f);
         l0.y += dg * 0.007f * cosf(o.degauss_phase * 1.31f + l0.x * 9.0f);
+        moved = true;
     }
-    v2 lp = dg > 0.0f ? tube_warp(l0, k1, k2) : l2;
+    // how deep this row is inside the tracking bar, 0 outside .. 1 at its centre
+    float bar = 0.0f, tear = 0.0f;
+    if (o.tracking > 0.001f && o.band_center > -1.0e8f)
+        bar = 1.0f - clamp01(fabsf(L.y * fh - o.band_center) / (o.band_h * 0.5f));
+    if (bar > 0.0f && (o.track_bend > 0.0f || o.track_noise > 0.0f)) {
+        // one hash per scanline per frame: neighbouring lines tear by different amounts
+        float hy = sinf(floorf(L.y * fh) * 12.9898f + o.seed * 78.233f) * 43758.5453f;
+        tear = hy - floorf(hy) - 0.5f;
+        float push = o.track_bend * bar * bar * sinf(L.y * fh * 0.045f + o.seed * 0.9f)
+                   + o.track_noise * bar * tear * 9.0f;
+        l0.x += push / fw;
+        moved = true;
+    }
+    if (o.jiggle_px != 0.0f) { l0.y += o.jiggle_px / fh; moved = true; }
+    v2 lp = moved ? tube_warp(l0, k1, k2) : l2;
     float sx = clamp01(lp.x) * fw, sy = clamp01(lp.y) * fh;
 
     // chromatic aberration: R and B through slightly different warps near the rim
-    float a = o.aberr * 0.004f * r2 + dg * 0.010f * sinf(o.degauss_phase * 0.7f);
+    float a = o.aberr * 0.004f * r2 + dg * 0.010f * sinf(o.degauss_phase * 0.7f) + o.track_chroma * bar * 0.0035f;
     v2 lr = tube_warp(V(l0.x + a, l0.y), k1, k2);
     v2 lb = tube_warp(V(l0.x - a, l0.y), k1, k2);
     float4 cc = tex2D<float4>(state_tex, sx, sy);
@@ -214,6 +230,12 @@ rim_done:;
             float dark = 1.0f - 0.05f * o.tracking * d * 0.5f;
             for (int c = 0; c < 3; c++) col[c] = (col[c] + o.phosphor[c] * add + core) * dark;
         }
+    }
+    // static inside the bar: per-pixel noise, brighter where the bar is deepest
+    if (bar > 0.0f && o.track_noise > 0.0f) {
+        float hn = sinf((x + 1.0f) * 91.345f + (y + 1.0f) * 47.853f + o.seed * 311.7f) * 43758.5453f;
+        float st = o.track_noise * bar * 0.10f * (hn - floorf(hn)) * (0.6f + 0.8f * fabsf(tear));
+        for (int c = 0; c < 3; c++) col[c] += st;
     }
     if (o.glare > 0.001f) {
         float gx = (L.x - 0.18f) / 0.34f, gy = (L.y - 0.10f) / 0.18f;

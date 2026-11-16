@@ -1,0 +1,10 @@
+{
+  "House green": {"decay_r": 50, "decay_g": 50, "decay_b": 50, "ghost": 0.008, "ghost_decay": 800, "ghost_rise": 500, "halation": 0.3, "beam": 0.5, "curv": 1, "scan": 0.22, "tracking": 0.6, "track_bend": 6, "track_noise": 0.35, "track_chroma": 1, "jiggle": 0.15, "flicker": 0.35},
+  "Long green (P39-like)": {"decay_r": 60, "decay_g": 180, "decay_b": 90, "ghost": 0.012, "ghost_decay": 1800, "ghost_rise": 400, "halation": 0.4},
+  "Medium green (P1-like)": {"decay_r": 12, "decay_g": 24, "decay_b": 14, "ghost": 0.004, "ghost_decay": 600, "ghost_rise": 500, "halation": 0.3},
+  "Radar (P7-like)": {"decay_r": 160, "decay_g": 220, "decay_b": 15, "ghost": 0.02, "ghost_decay": 3500, "ghost_rise": 300, "halation": 0.5},
+  "Colour TV (P22-like)": {"decay_r": 1.5, "decay_g": 1.5, "decay_b": 1.5, "ghost": 0.0015, "ghost_decay": 2500, "ghost_rise": 200, "halation": 0.25},
+  "No ghost": {"ghost": 0},
+  "Worn tape": {"tracking": 1, "track_rest": 0.5, "track_sweep": 4, "band_h": 320, "track_bend": 28, "track_noise": 0.9, "track_chroma": 2.5, "jiggle": 0.8, "flicker": 0.8},
+  "Clean glass": {"tracking": 0, "jiggle": 0, "flicker": 0, "scan": 0.1, "track_bend": 0, "track_noise": 0}
+}

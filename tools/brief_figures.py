@@ -160,6 +160,34 @@ def speed2():
     return "\n".join(o)
 
 
+def aim(W=1181, H=950):
+    """Three small maps of one window: how far each curve draws things from where they are."""
+    out = subprocess.run([sys.executable, os.path.join(HERE, "tools", "aim_map.py"), "--json", str(W), str(H)], capture_output=True, text=True, check=True)
+    d = json.loads(out.stdout)["shapes"]
+    names = list(d)
+    labels = ["classic barrel", "flat middle", "flat middle + safe edge"]
+    pw, ph, gap, left, top = 226, 150, 22, 10, 30
+    o = ['<svg viewBox="0 0 760 250" role="img" aria-label="Three maps of the same window. In the classic barrel most of the window is drawn noticeably away from its true place, worst in the corners. With a flat middle only the four corners move. With a safe edge as well, the rim no longer covers the window.">']
+    for n, (name, label) in enumerate(zip(names, labels)):
+        x0 = left + n * (pw + gap)
+        g = d[name]["grid"]
+        rows, cols = len(g), len(g[0])
+        cw, chh = pw / cols, ph / rows
+        o.append('<text class="ink" x="%d" y="%d" font-size="13" font-weight="700">%s</text>' % (x0, top - 10, label))
+        for j in range(rows):
+            for i in range(cols):
+                v = g[j][i]
+                cls = "ready" if v <= 4 else "mine" if v <= 20 else "fail"
+                o.append('<rect class="%s" x="%.1f" y="%.1f" width="%.1f" height="%.1f" stroke-width="0.4"/>' % (cls, x0 + i * cw, top + j * chh, cw - 0.6, chh - 0.6))
+        v = d[name]
+        o.append('<text class="ink2" x="%d" y="%d" font-size="11">%.0f%% of the window within 4 px</text>' % (x0, top + ph + 16, 100 * v["share_within_4px"]))
+        o.append('<text class="ink2" x="%d" y="%d" font-size="11">worst: %.0f px, in a corner</text>' % (x0, top + ph + 31, v["worst_px"]))
+        o.append('<text class="ink2" x="%d" y="%d" font-size="11">rim covers %.1f%% of the window</text>' % (x0, top + ph + 46, 100 * v["window_covered_by_rim"]))
+    o.append('<text class="ready" x="10" y="244" font-size="11">green: within 4 px</text><text class="mine" x="150" y="244" font-size="11">yellow: 4 to 20 px</text><text class="fail" x="290" y="244" font-size="11">orange: more than 20 px</text><text class="ink2" x="470" y="244" font-size="11">a %d × %d window, logical pixels</text>' % (W, H))
+    o.append("</svg>")
+    return "\n".join(o)
+
+
 def img(path):
     with open(path, "rb") as f:
         return "data:image/jpeg;base64," + base64.b64encode(f.read()).decode()
@@ -167,4 +195,4 @@ def img(path):
 
 if __name__ == "__main__":
     what = sys.argv[1]
-    print({"cost": cost, "handoff": handoff, "clock": clock, "low_clock": low_clock, "speed2": speed2}[what]() if what != "img" else img(sys.argv[2]))
+    print({"cost": cost, "handoff": handoff, "clock": clock, "low_clock": low_clock, "speed2": speed2, "aim": aim}[what]() if what != "img" else img(sys.argv[2]))

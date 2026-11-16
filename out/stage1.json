@@ -18,7 +18,7 @@
   {"test": "4", "check": "the trail is still decaying when compared (the check is not vacuous)", "pass": true, "measured": "0.02518"},
   {"test": "5", "check": "resize resets: the new surface holds the current frame, no old trail", "pass": true, "measured": "policy: reset, not reprojection"},
   {"test": "5", "check": "resize is deterministic: two runs, identical bits", "pass": true, "measured": "identical"},
-  {"test": "5", "check": "hide/show 200 times at 1080p: no VRAM left behind", "pass": true, "measured": "free VRAM moved 27.6 MB on a GPU shared with the desktop (attempt 2 of 3); one leaked surface per cycle would be 6328 MB"},
+  {"test": "5", "check": "hide/show 200 times at 1080p: no VRAM left behind", "pass": true, "measured": "free VRAM moved 0.0 MB on a GPU shared with the desktop (attempt 1 of 3); one leaked surface per cycle would be 6328 MB"},
   {"test": "5", "check": "a new surface filled with NaN adopts the frame cleanly", "pass": true, "measured": "every value equals the frame after one update"},
   {"test": "5", "check": "backend failure surfaces as an error; the fallback output is the input", "pass": true, "measured": "exception caught, frame passed through"},
   {"test": "6", "check": "the active flag drops after the trail fades, and stays down", "pass": true, "measured": "last active frame 35 = 433 ms after the square vanished (theory 440 ms)"},

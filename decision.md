@@ -28,14 +28,14 @@ Second pass, measured the same way (p95 GPU time, 600 frames, full clock):
 
 | Size | Shipped glass | Shader phosphor | CUDA, first pass | CUDA v2, same picture | CUDA v2, all effects |
 |---|---|---|---|---|---|
-| 960 x 540 | 0.027 ms | 0.101 ms | 0.093 ms | **0.056 ms** | 0.078 ms |
-| 1920 x 1080 | 0.096 ms | 0.367 ms | 0.350 ms | **0.203 ms** | 0.296 ms |
-| 3840 x 2160 | 0.414 ms | 1.419 ms | 1.501 ms | **0.953 ms** | 1.370 ms |
+| 960 x 540 | 0.027 ms | 0.102 ms | 0.094 ms | **0.058 ms** | 0.080 ms |
+| 1920 x 1080 | 0.097 ms | 0.372 ms | 0.356 ms | **0.208 ms** | 0.302 ms |
+| 3840 x 2160 | 0.418 ms | 1.402 ms | 1.509 ms | **0.972 ms** | 1.324 ms |
 
-- **v2 with the same picture is 45% faster than the shader at 1080p** and 42%
+- **v2 with the same picture is 44% faster than the shader at 1080p** and 42%
   faster than the first pass. Its output differs from the first pass's by at most
   1 step in 255 (`out/glsl_vs_cuda_image.csv`, pair `cuda_v1_vs_v2_plain`).
-- Both v2 rows meet the 1.0 ms gate at 4K (+0.54 and +0.96 over the shipped glass),
+- Both v2 rows meet the 1.0 ms gate at 4K (+0.55 and +0.91 over the shipped glass),
   which neither first-pass path did.
 - Where the speed came from: the state is stored at half precision (the update and
   every read of it halve their memory traffic); the input's sRGB decode is done by
@@ -86,10 +86,38 @@ activity readback, a footprint-filtered aperture mask.
 - **As a filter over arbitrary windows it needs one integration per compositor.**
   That is the non-portable part. As a video tool, or inside one's own app, it
   needs none.
-- **Snappy:** a v2 frame takes 0.60 ms end to end at 1080p (all effects), against
+- **Inside Hyprland: proven in a sealed seat.** See the next section.
+- **Snappy:** a v2 frame takes 0.61 ms end to end at 1080p in the lab (all effects) and about 1 ms as a pass inside Hyprland, against
   6.9 ms available at 144 Hz, and a new letter reaches full brightness in the frame
-  that draws it. Input-to-display latency inside a real compositor has not been
-  measured, and that is the next proof.
+  that draws it. Input-to-display latency has not been
+  measured.
+
+### Inside Hyprland
+
+`hypr/prove` runs the second pass as a plugin inside a real Hyprland 0.56.2, in
+omarchy-crt's sealed test seat (a sandbox with no display device, no input and
+no live Wayland socket), with one phosphor surface for the whole monitor. Nine
+checks, all passing (`out/hypr/hypr-proof.json`):
+
+- CUDA initialises inside the compositor and registers the compositor's own
+  OpenGL ES 3.2 textures. This was the risk most likely to end the idea.
+- The frame through the pass differs from the frame without it, and the top
+  layer drawn after the pass stays flat.
+- The whole pass, wall clock with the GPU finished either side (copy the scene
+  in, map, three kernels, unmap, copy back) at 1920 x 1080: mean 0.99 ms, worst 3.08 ms over 239 frames at 1920x1080. Three runs gave
+  means of 0.85, 0.99 and 1.15 ms; the worst single frame was near 3 to 4 ms.
+- An empty desk goes quiet; a window appearing wakes the pass; a still window
+  goes quiet again once its ghost has settled.
+- A failure injected mid-frame, with textures mapped, is caught: the pass
+  stands down, the compositor keeps answering, and the frame is identical to
+  the frame with the pass off.
+- The plugin unloads and the compositor keeps answering.
+
+What this does not show: per-window surfaces (the tracer treats the monitor as
+one tile), damage limited to a window's box (it damages the whole monitor while
+anything is moving), input-to-display latency, a real GPU fault, or anything on
+a live session. The plan for those, written by the reviewing agent, is
+`reviews/PLAN-2026-11-15-hyprland-proof.md`.
 
 ## The evidence (first pass)
 

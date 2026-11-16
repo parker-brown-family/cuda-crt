@@ -10,3 +10,4 @@ out/demo_*.txt
 out/knobs.json
 out/.knobs.json.*
 reports/
+out/hypr/5-*.png

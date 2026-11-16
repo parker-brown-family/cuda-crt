@@ -1,0 +1,56 @@
+{
+ "failed": 0,
+ "checks": [
+  {
+   "pass": true,
+   "check": "the plugin initialised CUDA and registered the compositor's GLES textures",
+   "measured": "surface 1920x1080: two GLES textures registered with CUDA, half-precision state allocated"
+  },
+  {
+   "pass": true,
+   "check": "the frame through the pass differs from the frame without it",
+   "measured": "98% of sampled pixels differ, 1920x1080"
+  },
+  {
+   "pass": true,
+   "check": "whole pass, wall clock with the GPU finished either side (copy in, map, three kernels, unmap, copy back)",
+   "measured": "mean 0.99 ms, worst 3.08 ms over 239 frames at 1920x1080"
+  },
+  {
+   "pass": true,
+   "check": "an empty desk, glass still: the pass stops being asked for frames",
+   "measured": "759 frames, then 759 two seconds later"
+  },
+  {
+   "pass": true,
+   "check": "a window appearing wakes the pass",
+   "measured": "759 frames while idle, 822 a second after a window opened"
+  },
+  {
+   "pass": true,
+   "check": "a still window on screen: the pass goes quiet again",
+   "measured": "866 frames, then 866 two seconds later"
+  },
+  {
+   "pass": true,
+   "check": "the failure was caught, logged, and the compositor still answers",
+   "measured": "DEAD, passing frames through untouched: injected failure, mid-frame, textures mapped"
+  },
+  {
+   "pass": true,
+   "check": "after the failure the frame is the untouched picture",
+   "measured": "identical to the frame with the pass off"
+  },
+  {
+   "pass": true,
+   "check": "the plugin unloads and the compositor keeps answering",
+   "measured": ""
+  }
+ ],
+ "log": [
+  "CUDA device that owns this GL context: 0",
+  "ready: NVIDIA GeForce RTX 3080 Laptop GPU, CUDA driver API 13.4, NVRTC 12.9, GL OpenGL ES 3.2 NVIDIA 615.78.08",
+  "surface 1920x1080: two GLES textures registered with CUDA, half-precision state allocated",
+  "DEAD, passing frames through untouched: injected failure, mid-frame, textures mapped"
+ ]
+}

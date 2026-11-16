@@ -87,6 +87,15 @@ with no window):
 tools/tube.sh
 ```
 
+Inside Hyprland. A plugin runs the same kernels in a real Hyprland, in a sealed
+seat that cannot reach a live desktop (it needs a checkout of omarchy-crt for
+that seat; point `OMARCHY_CRT` at it). Nine checks: texture sharing, the
+picture, the cost of a pass, idle, a failure mid-frame, unload:
+
+```bash
+hypr/prove /tmp/cuda-seat out/hypr
+```
+
 Any video in, CRT video out:
 
 ```bash
@@ -135,10 +144,14 @@ baseline/              the shipped omarchy-crt glass shader, pinned
 src/cpu_ref.hpp        the CPU reference the kernels are judged against
 src/cudart.hpp         NVRTC + driver API, no toolkit
 src/glrt.hpp           headless EGL + OpenGL helpers
+src/look.hpp           the dials and the per-frame scalars the clock drives
+src/cuda_path.hpp      the CUDA side of a frame (no OpenGL header, so a plugin can use it)
 src/pipelines.hpp      every path behind one shape
 src/probe.cpp  src/stage1_test.cpp  src/stage2_bench.cpp  src/crt_render.cpp
-tools/                 fixtures, demo, benchmark runner, mutation check, summaries
-reviews/               an independent review of the first pass
+tools/                 fixtures, demo, live tube, slider panel (knobs.py), benchmark runner, mutation check
+hypr/                  the tracer plugin that runs the kernels inside Hyprland, and its proof
+docs/research-notes.md what outside sources say, and what was done with it
+reviews/               an independent review of the first pass, and that reviewer's later build note and Hyprland plan
 audit.md  decision.md  results.csv
 ```
 

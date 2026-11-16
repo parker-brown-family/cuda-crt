@@ -1,0 +1,7 @@
+[
+  {"name":"ghost","label":"Phosphor burn ghost","group":"Phosphor","min":0,"max":0.03,"step":0.0005,"default":0.008,"unit":"","help":"How strongly the last screen lingers."},
+  {"name":"ghost_decay","label":"Ghost linger","group":"Phosphor","min":50,"max":5000,"step":10,"default":600,"unit":"ms","help":"How long the faint second tail persists."},
+  {"name":"decay_g","label":"Green fade","group":"Phosphor","min":5,"max":400,"step":1,"default":50,"unit":"ms","help":"Decay time for the main green phosphor."},
+  {"name":"curv","label":"Barrel warp","group":"Glass","min":0,"max":3,"step":0.01,"default":1,"unit":"","help":"Bend the image toward the tube rim."},
+  {"name":"tracking","label":"Tracking disturbance","group":"Signal / experimental","min":0,"max":2,"step":0.01,"default":0.6,"unit":"","help":"Strength of the rolling tracking bar."}
+]

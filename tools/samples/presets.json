@@ -1,0 +1,5 @@
+{
+  "P1 green": {"ghost":0.008,"ghost_decay":600,"decay_g":50,"curv":1,"tracking":0.6},
+  "P39 long green": {"ghost":0.02,"ghost_decay":3000,"decay_g":180,"curv":1.4,"tracking":0.9},
+  "Clean glass": {"ghost":0,"ghost_decay":50,"decay_g":5,"curv":0,"tracking":0}
+}

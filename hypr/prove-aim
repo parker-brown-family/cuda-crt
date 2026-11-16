@@ -1,0 +1,158 @@
+#!/usr/bin/env python3
+"""Do clicks land on what is drawn under the cursor?  hypr/prove-aim <state-dir> <out-dir>
+
+In omarchy-crt's sealed seat (as hypr/prove): a real Chromium shows hypr/client/aim.html,
+one small target at a time at thirteen spots, the four corners among them. For every
+spot the test finds the target IN THE CAPTURED PICTURE (never from the curve's formula),
+moves a virtual mouse to where it is drawn, clicks, and asks the PAGE whether it was hit
+(the page moves the target on, and says so in its title). Four runs:
+  D  the pass switched off:                    every spot hit; where each is drawn when nothing is bent
+  A  the full tube, pointer mapped:            every spot must be hit
+  B  the same picture, mapping switched off:   the corners must MISS (else the test proves nothing)
+  C  flat middle and safe edge, mapped:        every spot must be hit
+Every click moves the page on and the page itself says hit or miss: nothing is timed.
+The tracking bar, jiggle and flicker are off: they move the picture for a moment and are not mapped."""
+import json, math, os, subprocess, sys, time
+S, OUT = os.path.abspath(sys.argv[1]), os.path.abspath(sys.argv[2])
+HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.argv = [sys.argv[0], S, OUT]
+src = open(HERE + "/hypr/prove").read()
+exec(compile(src[:src.index('which = sys.argv[3]')], "hypr/prove", "exec"))
+SCALE = 1.6
+up("HEADLESS-1 2560x1600@60 1.6 0 0 0")
+RIG = OMA + "/native/rig"
+X = RIG + "/wlr-virtual-pointer-unstable-v1.xml"
+subprocess.run(["wayland-scanner", "client-header", X, HOME + "/vp.h"], check=True)
+subprocess.run(["wayland-scanner", "private-code", X, HOME + "/vp.c"], check=True)
+subprocess.run("gcc -O1 -I%s %s/vptr.c %s/vp.c -o %s/vptr $(pkg-config --cflags --libs wayland-client)" % (HOME, RIG, HOME, HOME), shell=True, check=True)
+FIFO = HOME + "/vptr.fifo"
+clients.append(subprocess.Popen([S + "/in", HOME + "/vptr", FIFO, "1600", "1000"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True))
+subprocess.run(["cp", HERE + "/hypr/client/aim.html", HOME + "/aim.html"], check=True)
+clients.append(subprocess.Popen([S + "/in", "chromium", "--ozone-platform=wayland", "--no-sandbox", "--user-data-dir=" + HOME + "/chromium", "--no-first-run",
+                                 "--no-default-browser-check", "--test-type", "--app=file://" + HOME + "/aim.html"], stdout=open(HOME + "/chromium.log", "w"), stderr=subprocess.STDOUT, start_new_session=True))
+
+
+def win():
+    return next((c for c in windows() if c.get("title", "").startswith("aim ")), None)
+
+
+for _ in range(80):
+    if win() and os.path.exists(FIFO):
+        break
+    time.sleep(0.25)
+W0 = win()
+# a click here, inside the window and clear of every spot, moves the page on as a miss
+SKIP = "move %d %d" % (W0["at"][0] + W0["size"][0] * 0.62, W0["at"][1] + W0["size"][1] * 0.38)
+print("  window:", W0["at"], W0["size"])
+put("target", "title:aim "); put("look", "tube"); put("ttl", "900")
+BASE = "tracking=0,jiggle=0,flicker=0,halation=0.08,glow=0.15,beam=0.2,glow_knee=0.2"
+put("set", BASE + ",core=0,inset=0")
+print("  plugin load:", seat("hyprctl", "plugin", "load", HOME + "/cuda-pass.so").stdout.strip().splitlines()[-1:])
+send = lambda line: open(FIFO, "w").write(line + "\n")
+send("move 5 5")
+time.sleep(2.5)
+print("  ", [l for l in log().splitlines() if l.startswith("pointer")])
+
+
+def title():
+    w = win()
+    if not w:
+        return None
+    p = w["title"].split()
+    return {"count": int(p[1]), "spot": int(p[2]), "x": int(p[3]), "y": int(p[4]), "last": p[5], "at": w["at"]}
+
+
+def find_target(fr, count):
+    """Centroid of the target in the captured frame, framebuffer pixels. Its colour depends on
+    the page's count (magenta when even, cyan when odd), so a stale picture is not found."""
+    w, h, px = fr
+    sx = sy = n = 0
+    for y in range(0, h, 2):
+        row = px[y * w * 4:(y + 1) * w * 4]
+        for x in range(0, w, 2):
+            r, g, b = row[x * 4], row[x * 4 + 1], row[x * 4 + 2]
+            magenta = r > 140 and b > 110 and g < 120 and r - g > 80 and b - g > 50
+            cyan = g > 140 and b > 140 and r < 120 and g - r > 70 and b - r > 70
+            if (cyan if count % 2 else magenta):
+                sx += x; sy += y; n += 1
+    return (sx / n, sy / n, n) if n >= 6 else None
+
+
+def run(label, n_spots=13):
+    """One click at each of the thirteen spots, in the page's order. Every click moves the
+    page on and the page says whether it was on the target, so nothing is timed."""
+    rows, seen = [], set()
+    t_end = time.time() + 150
+    while len(seen) < n_spots and time.time() < t_end:
+        t0 = title()
+        if t0 is None:
+            time.sleep(0.2); continue
+        if t0["spot"] in seen:           # a spot already tried this run: click the background to move on
+            send(SKIP); send("click"); time.sleep(0.4); continue
+        c = None
+        for _ in range(12):              # until the picture shows this count's target
+            fr = shot("_aim")
+            c = find_target(fr, t0["count"]) if fr else None
+            if c: break
+            time.sleep(0.15)
+        if c is None:
+            print("    %s spot %2d  NOT VISIBLE: covered or cut off by the glass" % (label, t0["spot"]), flush=True); seen.add(t0["spot"])
+            rows.append({"spot": t0["spot"], "drawn": None, "page_xy": [t0["x"], t0["y"]], "hit": False, "visible": False})
+            send(SKIP); send("click"); time.sleep(0.4); continue
+        dx, dy = c[0] / SCALE, c[1] / SCALE            # where it is DRAWN, in logical pixels
+        send("move %d %d" % (round(dx), round(dy))); time.sleep(0.12)
+        send("click")
+        t2 = None
+        for _ in range(25):
+            time.sleep(0.08)
+            t2 = title()
+            if t2 and t2["count"] > t0["count"]: break
+        hit = bool(t2 and t2["count"] > t0["count"] and t2["last"] == "hit")
+        seen.add(t0["spot"])
+        rows.append({"spot": t0["spot"], "drawn": [round(dx, 1), round(dy, 1)], "page_xy": [t0["x"], t0["y"]], "hit": hit, "visible": True})
+        print("    %s spot %2d  page %4d,%4d  drawn at %4.0f,%4.0f (%d px of colour)  %s" % (label, t0["spot"], t0["x"], t0["y"], dx, dy, c[2], "HIT" if hit else "miss"), flush=True)
+        send("move 5 5"); time.sleep(0.25)
+    return rows
+
+
+CORNERS = {0, 1, 2, 3}
+def moved(rows, flat):
+    """How far each spot is drawn from where it is drawn with the pass off (the same spot
+    in run D): the displacement the curve introduces, measured in the picture."""
+    ref = {r["spot"]: r["drawn"] for r in flat}
+    return {r["spot"]: round(math.hypot(r["drawn"][0] - ref[r["spot"]][0], r["drawn"][1] - ref[r["spot"]][1]), 1) for r in rows if r["spot"] in ref and r["drawn"] and ref[r["spot"]]}
+
+
+try:
+    put("keep-drawing")   # every capture is a fresh frame
+    print("D. the pass off: where every spot is drawn when nothing is bent")
+    put("off"); time.sleep(0.8); D = run("D"); drop("off"); time.sleep(1.0)
+    print("A. the classic curve, pointer mapped")
+    put("set", BASE + ",core=0,inset=0"); time.sleep(0.6); A = run("A")
+    print("E. the curve across the whole edge, picture drawn smaller so the rim sits outside the window, mapped")
+    put("set", BASE + ",core=0,inset=0.06"); time.sleep(0.6); E = run("E")
+    print("B. the same picture as E, mapping off (the control)")
+    put("input-flat"); B = run("B"); drop("input-flat")
+    print("C. flat middle and safe edge, mapped")
+    put("set", BASE + ",core=0.6,inset=0.05"); time.sleep(0.6); C = run("C")
+    hits = lambda rows: sum(r["hit"] for r in rows)
+    seen_ = lambda rows: [r for r in rows if r["visible"]]
+    mA, mE, mB, mC = moved(A, D), moved(E, D), moved(B, D), moved(C, D)
+    corners = lambda mm: [mm.get(k) for k in sorted(CORNERS)]
+    print()
+    verdict(len(D) == 13 and hits(D) == 13, "D. pass off: every spot is hit", "%d of %d hit" % (hits(D), len(D)))
+    verdict(len(E) == 13 and all(r["visible"] for r in E) and min(v for v in corners(mE) if v is not None) > 20,
+            "E. the picture really is bent and every spot is visible", "corner targets drawn %s px from their flat place" % corners(mE))
+    verdict(len(E) == 13 and hits(E) == 13, "E. curve across the whole edge + safe edge, mapped: every spot hit where it is drawn", "%d of %d hit" % (hits(E), len(E)))
+    cm = [r for r in B if r["spot"] in CORNERS and r["visible"]]
+    verdict(len(cm) == 4 and not any(r["hit"] for r in cm), "B. control: same picture, mapping off: a click where a corner is drawn misses it", "%d of %d corner clicks missed; %d of %d spots hit overall" % (sum(not r["hit"] for r in cm), len(cm), hits(B), len(B)))
+    verdict(len(C) == 13 and hits(C) == 13, "C. flat middle and safe edge, mapped: every spot is hit", "%d of %d hit; corners drawn %s px from flat" % (hits(C), len(C), corners(mC)))
+    vis = seen_(A)
+    verdict(all(r["hit"] for r in vis), "A. classic curve, mapped: every spot that can be SEEN is hit", "%d of %d visible, all %d hit; not visible: spots %s" % (len(vis), len(A), hits(A), [r["spot"] for r in A if not r["visible"]]))
+    verdict("DEAD" not in log() and alive(), "the pass never failed and the compositor answers")
+    json.dump({"failed": fails, "checks": results, "D": D, "A": A, "E": E, "B": B, "C": C, "moved_A": mA, "moved_E": mE, "moved_B": mB, "moved_C": mC, "log": log().splitlines()}, open(OUT + "/aim-proof.json", "w"), indent=1)
+finally:
+    seat("hyprctl", "plugin", "unload", HOME + "/cuda-pass.so")
+    down()
+print("all checks passed" if not fails else "%d FAILED" % fails)
+sys.exit(1 if fails else 0)

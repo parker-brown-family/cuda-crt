@@ -1,0 +1,950 @@
+{
+ "failed": 0,
+ "checks": [
+  {
+   "pass": true,
+   "check": "D. pass off: every spot is hit",
+   "measured": "13 of 13 hit"
+  },
+  {
+   "pass": true,
+   "check": "E. the picture really is bent and every spot is visible",
+   "measured": "corner targets drawn [98.2, 96.6, 98.6, 98.0] px from their flat place"
+  },
+  {
+   "pass": true,
+   "check": "E. curve across the whole edge + safe edge, mapped: every spot hit where it is drawn",
+   "measured": "13 of 13 hit"
+  },
+  {
+   "pass": true,
+   "check": "B. control: same picture, mapping off: a click where a corner is drawn misses it",
+   "measured": "4 of 4 corner clicks missed; 1 of 13 spots hit overall"
+  },
+  {
+   "pass": true,
+   "check": "C. flat middle and safe edge, mapped: every spot is hit",
+   "measured": "13 of 13 hit; corners drawn [62.4, 61.0, 62.6, 62.1] px from flat"
+  },
+  {
+   "pass": true,
+   "check": "A. classic curve, mapped: every spot that can be SEEN is hit",
+   "measured": "9 of 13 visible, all 9 hit; not visible: spots [0, 1, 2, 3]"
+  },
+  {
+   "pass": true,
+   "check": "the pass never failed and the compositor answers",
+   "measured": ""
+  }
+ ],
+ "D": [
+  {
+   "spot": 0,
+   "drawn": [
+    38.8,
+    38.8
+   ],
+   "page_xy": [
+    17,
+    17
+   ],
+   "hit": true,
+   "visible": true
+  },
+  {
+   "spot": 1,
+   "drawn": [
+    1560.6,
+    41.2
+   ],
+   "page_xy": [
+    1539,
+    17
+   ],
+   "hit": true,
+   "visible": true
+  },
+  {
+   "spot": 2,
+   "drawn": [
+    38.8,
+    960.6
+   ],
+   "page_xy": [
+    17,
+    939
+   ],
+   "hit": true,
+   "visible": true
+  },
+  {
+   "spot": 3,
+   "drawn": [
+    1560.6,
+    960.6
+   ],
+   "page_xy": [
+    1539,
+    939
+   ],
+   "hit": true,
+   "visible": true
+  },
+  {
+   "spot": 4,
+   "drawn": [
+    799.4,
+    41.2
+   ],
+   "page_xy": [
+    778,
+    17
+   ],
+   "hit": true,
+   "visible": true
+  },
+  {
+   "spot": 5,
+   "drawn": [
+    799.4,
+    960.6
+   ],
+   "page_xy": [
+    778,
+    939
+   ],
+   "hit": true,
+   "visible": true
+  },
+  {
+   "spot": 6,
+   "drawn": [
+    38.8,
+    499.4
+   ],
+   "page_xy": [
+    17,
+    478
+   ],
+   "hit": true,
+   "visible": true
+  },
+  {
+   "spot": 7,
+   "drawn": [
+    1560.6,
+    499.4
+   ],
+   "page_xy": [
+    1539,
+    478
+   ],
+   "hit": true,
+   "visible": true
+  },
+  {
+   "spot": 8,
+   "drawn": [
+    799.4,
+    499.4
+   ],
+   "page_xy": [
+    778,
+    478
+   ],
+   "hit": true,
+   "visible": true
+  },
+  {
+   "spot": 9,
+   "drawn": [
+    419.3,
+    269.3
+   ],
+   "page_xy": [
+    398,
+    248
+   ],
+   "hit": true,
+   "visible": true
+  },
+  {
+   "spot": 10,
+   "drawn": [
+    1180.0,
+    269.3
+   ],
+   "page_xy": [
+    1159,
+    248
+   ],
+   "hit": true,
+   "visible": true
+  },
+  {
+   "spot": 11,
+   "drawn": [
+    419.3,
+    730.0
+   ],
+   "page_xy": [
+    398,
+    709
+   ],
+   "hit": true,
+   "visible": true
+  },
+  {
+   "spot": 12,
+   "drawn": [
+    1180.0,
+    730.0
+   ],
+   "page_xy": [
+    1159,
+    709
+   ],
+   "hit": true,
+   "visible": true
+  }
+ ],
+ "A": [
+  {
+   "spot": 0,
+   "drawn": null,
+   "page_xy": [
+    17,
+    17
+   ],
+   "hit": false,
+   "visible": false
+  },
+  {
+   "spot": 1,
+   "drawn": null,
+   "page_xy": [
+    1539,
+    17
+   ],
+   "hit": false,
+   "visible": false
+  },
+  {
+   "spot": 2,
+   "drawn": null,
+   "page_xy": [
+    17,
+    939
+   ],
+   "hit": false,
+   "visible": false
+  },
+  {
+   "spot": 3,
+   "drawn": null,
+   "page_xy": [
+    1539,
+    939
+   ],
+   "hit": false,
+   "visible": false
+  },
+  {
+   "spot": 4,
+   "drawn": [
+    799.6,
+    56.9
+   ],
+   "page_xy": [
+    778,
+    17
+   ],
+   "hit": true,
+   "visible": true
+  },
+  {
+   "spot": 5,
+   "drawn": [
+    799.4,
+    942.6
+   ],
+   "page_xy": [
+    778,
+    939
+   ],
+   "hit": true,
+   "visible": true
+  },
+  {
+   "spot": 6,
+   "drawn": [
+    67.6,
+    499.5
+   ],
+   "page_xy": [
+    17,
+    478
+   ],
+   "hit": true,
+   "visible": true
+  },
+  {
+   "spot": 7,
+   "drawn": [
+    1531.8,
+    499.6
+   ],
+   "page_xy": [
+    1539,
+    478
+   ],
+   "hit": true,
+   "visible": true
+  },
+  {
+   "spot": 8,
+   "drawn": [
+    799.4,
+    499.4
+   ],
+   "page_xy": [
+    778,
+    478
+   ],
+   "hit": true,
+   "visible": true
+  },
+  {
+   "spot": 9,
+   "drawn": [
+    425.0,
+    273.1
+   ],
+   "page_xy": [
+    398,
+    248
+   ],
+   "hit": true,
+   "visible": true
+  },
+  {
+   "spot": 10,
+   "drawn": [
+    1173.8,
+    273.1
+   ],
+   "page_xy": [
+    1159,
+    248
+   ],
+   "hit": true,
+   "visible": true
+  },
+  {
+   "spot": 11,
+   "drawn": [
+    425.1,
+    726.3
+   ],
+   "page_xy": [
+    398,
+    709
+   ],
+   "hit": true,
+   "visible": true
+  },
+  {
+   "spot": 12,
+   "drawn": [
+    1173.8,
+    726.2
+   ],
+   "page_xy": [
+    1159,
+    709
+   ],
+   "hit": true,
+   "visible": true
+  }
+ ],
+ "E": [
+  {
+   "spot": 0,
+   "drawn": [
+    122.7,
+    89.8
+   ],
+   "page_xy": [
+    17,
+    17
+   ],
+   "hit": true,
+   "visible": true
+  },
+  {
+   "spot": 1,
+   "drawn": [
+    1477.0,
+    89.7
+   ],
+   "page_xy": [
+    1539,
+    17
+   ],
+   "hit": true,
+   "visible": true
+  },
+  {
+   "spot": 2,
+   "drawn": [
+    123.1,
+    909.4
+   ],
+   "page_xy": [
+    17,
+    939
+   ],
+   "hit": true,
+   "visible": true
+  },
+  {
+   "spot": 3,
+   "drawn": [
+    1476.9,
+    909.6
+   ],
+   "page_xy": [
+    1539,
+    939
+   ],
+   "hit": true,
+   "visible": true
+  },
+  {
+   "spot": 4,
+   "drawn": [
+    799.3,
+    77.6
+   ],
+   "page_xy": [
+    778,
+    17
+   ],
+   "hit": true,
+   "visible": true
+  },
+  {
+   "spot": 5,
+   "drawn": [
+    799.7,
+    922.3
+   ],
+   "page_xy": [
+    778,
+    939
+   ],
+   "hit": true,
+   "visible": true
+  },
+  {
+   "spot": 6,
+   "drawn": [
+    103.1,
+    499.4
+   ],
+   "page_xy": [
+    17,
+    478
+   ],
+   "hit": true,
+   "visible": true
+  },
+  {
+   "spot": 7,
+   "drawn": [
+    1496.9,
+    499.4
+   ],
+   "page_xy": [
+    1539,
+    478
+   ],
+   "hit": true,
+   "visible": true
+  },
+  {
+   "spot": 8,
+   "drawn": [
+    799.4,
+    499.4
+   ],
+   "page_xy": [
+    778,
+    478
+   ],
+   "hit": true,
+   "visible": true
+  },
+  {
+   "spot": 9,
+   "drawn": [
+    446.1,
+    285.0
+   ],
+   "page_xy": [
+    398,
+    248
+   ],
+   "hit": true,
+   "visible": true
+  },
+  {
+   "spot": 10,
+   "drawn": [
+    1153.1,
+    285.1
+   ],
+   "page_xy": [
+    1159,
+    248
+   ],
+   "hit": true,
+   "visible": true
+  },
+  {
+   "spot": 11,
+   "drawn": [
+    446.0,
+    713.8
+   ],
+   "page_xy": [
+    398,
+    709
+   ],
+   "hit": true,
+   "visible": true
+  },
+  {
+   "spot": 12,
+   "drawn": [
+    1153.1,
+    713.8
+   ],
+   "page_xy": [
+    1159,
+    709
+   ],
+   "hit": true,
+   "visible": true
+  }
+ ],
+ "B": [
+  {
+   "spot": 0,
+   "drawn": [
+    123.5,
+    89.8
+   ],
+   "page_xy": [
+    17,
+    17
+   ],
+   "hit": false,
+   "visible": true
+  },
+  {
+   "spot": 1,
+   "drawn": [
+    1476.3,
+    89.8
+   ],
+   "page_xy": [
+    1539,
+    17
+   ],
+   "hit": false,
+   "visible": true
+  },
+  {
+   "spot": 2,
+   "drawn": [
+    124.0,
+    909.5
+   ],
+   "page_xy": [
+    17,
+    939
+   ],
+   "hit": false,
+   "visible": true
+  },
+  {
+   "spot": 3,
+   "drawn": [
+    1476.2,
+    909.5
+   ],
+   "page_xy": [
+    1539,
+    939
+   ],
+   "hit": false,
+   "visible": true
+  },
+  {
+   "spot": 4,
+   "drawn": [
+    799.6,
+    77.5
+   ],
+   "page_xy": [
+    778,
+    17
+   ],
+   "hit": false,
+   "visible": true
+  },
+  {
+   "spot": 5,
+   "drawn": [
+    799.4,
+    922.3
+   ],
+   "page_xy": [
+    778,
+    939
+   ],
+   "hit": false,
+   "visible": true
+  },
+  {
+   "spot": 6,
+   "drawn": [
+    103.5,
+    499.4
+   ],
+   "page_xy": [
+    17,
+    478
+   ],
+   "hit": false,
+   "visible": true
+  },
+  {
+   "spot": 7,
+   "drawn": [
+    1496.3,
+    499.4
+   ],
+   "page_xy": [
+    1539,
+    478
+   ],
+   "hit": false,
+   "visible": true
+  },
+  {
+   "spot": 8,
+   "drawn": [
+    799.4,
+    499.4
+   ],
+   "page_xy": [
+    778,
+    478
+   ],
+   "hit": true,
+   "visible": true
+  },
+  {
+   "spot": 9,
+   "drawn": [
+    445.7,
+    285.1
+   ],
+   "page_xy": [
+    398,
+    248
+   ],
+   "hit": false,
+   "visible": true
+  },
+  {
+   "spot": 10,
+   "drawn": [
+    1153.1,
+    285.1
+   ],
+   "page_xy": [
+    1159,
+    248
+   ],
+   "hit": false,
+   "visible": true
+  },
+  {
+   "spot": 11,
+   "drawn": [
+    445.7,
+    713.8
+   ],
+   "page_xy": [
+    398,
+    709
+   ],
+   "hit": false,
+   "visible": true
+  },
+  {
+   "spot": 12,
+   "drawn": [
+    1153.1,
+    713.8
+   ],
+   "page_xy": [
+    1159,
+    709
+   ],
+   "hit": false,
+   "visible": true
+  }
+ ],
+ "C": [
+  {
+   "spot": 0,
+   "drawn": [
+    92.2,
+    71.1
+   ],
+   "page_xy": [
+    17,
+    17
+   ],
+   "hit": true,
+   "visible": true
+  },
+  {
+   "spot": 1,
+   "drawn": [
+    1507.6,
+    71.4
+   ],
+   "page_xy": [
+    1539,
+    17
+   ],
+   "hit": true,
+   "visible": true
+  },
+  {
+   "spot": 2,
+   "drawn": [
+    92.2,
+    928.0
+   ],
+   "page_xy": [
+    17,
+    939
+   ],
+   "hit": true,
+   "visible": true
+  },
+  {
+   "spot": 3,
+   "drawn": [
+    1507.8,
+    927.9
+   ],
+   "page_xy": [
+    1539,
+    939
+   ],
+   "hit": true,
+   "visible": true
+  },
+  {
+   "spot": 4,
+   "drawn": [
+    799.4,
+    61.1
+   ],
+   "page_xy": [
+    778,
+    17
+   ],
+   "hit": true,
+   "visible": true
+  },
+  {
+   "spot": 5,
+   "drawn": [
+    799.4,
+    938.7
+   ],
+   "page_xy": [
+    778,
+    939
+   ],
+   "hit": true,
+   "visible": true
+  },
+  {
+   "spot": 6,
+   "drawn": [
+    75.0,
+    499.4
+   ],
+   "page_xy": [
+    17,
+    478
+   ],
+   "hit": true,
+   "visible": true
+  },
+  {
+   "spot": 7,
+   "drawn": [
+    1524.4,
+    499.4
+   ],
+   "page_xy": [
+    1539,
+    478
+   ],
+   "hit": true,
+   "visible": true
+  },
+  {
+   "spot": 8,
+   "drawn": [
+    799.4,
+    499.4
+   ],
+   "page_xy": [
+    778,
+    478
+   ],
+   "hit": true,
+   "visible": true
+  },
+  {
+   "spot": 9,
+   "drawn": [
+    437.5,
+    280.0
+   ],
+   "page_xy": [
+    398,
+    248
+   ],
+   "hit": true,
+   "visible": true
+  },
+  {
+   "spot": 10,
+   "drawn": [
+    1161.9,
+    280.0
+   ],
+   "page_xy": [
+    1159,
+    248
+   ],
+   "hit": true,
+   "visible": true
+  },
+  {
+   "spot": 11,
+   "drawn": [
+    437.5,
+    718.8
+   ],
+   "page_xy": [
+    398,
+    709
+   ],
+   "hit": true,
+   "visible": true
+  },
+  {
+   "spot": 12,
+   "drawn": [
+    1161.8,
+    718.8
+   ],
+   "page_xy": [
+    1159,
+    709
+   ],
+   "hit": true,
+   "visible": true
+  }
+ ],
+ "moved_A": {
+  "4": 15.7,
+  "5": 18.0,
+  "6": 28.8,
+  "7": 28.8,
+  "8": 0.0,
+  "9": 6.9,
+  "10": 7.3,
+  "11": 6.9,
+  "12": 7.3
+ },
+ "moved_E": {
+  "0": 98.2,
+  "1": 96.6,
+  "2": 98.6,
+  "3": 98.0,
+  "4": 36.4,
+  "5": 38.3,
+  "6": 64.3,
+  "7": 63.7,
+  "8": 0.0,
+  "9": 31.1,
+  "10": 31.2,
+  "11": 31.2,
+  "12": 31.4
+ },
+ "moved_B": {
+  "0": 98.9,
+  "1": 97.3,
+  "2": 99.3,
+  "3": 98.7,
+  "4": 36.3,
+  "5": 38.3,
+  "6": 64.7,
+  "7": 64.3,
+  "8": 0.0,
+  "9": 30.8,
+  "10": 31.2,
+  "11": 31.0,
+  "12": 31.4
+ },
+ "moved_C": {
+  "0": 62.4,
+  "1": 61.0,
+  "2": 62.6,
+  "3": 62.1,
+  "4": 19.9,
+  "5": 21.9,
+  "6": 36.2,
+  "7": 36.2,
+  "8": 0.0,
+  "9": 21.1,
+  "10": 21.0,
+  "11": 21.4,
+  "12": 21.4
+ },
+ "log": [
+  "pointer: mapped through the glass",
+  "CUDA device that owns this GL context: 0",
+  "ready: NVIDIA GeForce RTX 3080 Laptop GPU, CUDA driver API 13.4, NVRTC 12.9, GL OpenGL ES 3.2 NVIDIA 615.78.08, kernel files compiled this start: 0, target: title:aim , look: tube",
+  "framebuffer 2560x1600: two GLES textures registered with CUDA",
+  "phosphor 2490x1530 at 35,35 on a 2560x1600 framebuffer",
+  "stood down: off",
+  "ready: NVIDIA GeForce RTX 3080 Laptop GPU, CUDA driver API 13.4, NVRTC 12.9, GL OpenGL ES 3.2 NVIDIA 615.78.08, kernel files compiled this start: 0, target: title:aim , look: tube",
+  "framebuffer 2560x1600: two GLES textures registered with CUDA",
+  "phosphor 2490x1530 at 35,35 on a 2560x1600 framebuffer"
+ ]
+}

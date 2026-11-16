@@ -26,6 +26,7 @@
 //   set            name=value pairs laid over the look, e.g. curv=1.5,scan=0.3,ghost=0.02,
 //                  decay=120 (ms). Read every frame: rewrite it and the window changes
 //   off            stand the pass down and release its textures
+//   input-flat     keep the picture bent but stop mapping the pointer (a test's control)
 //   ttl            a number of seconds: stand down by itself after that long
 //   fail           throw in the middle of a frame, once, to prove the fallback
 //   keep-drawing   damage every frame (a capture needs a frame)
@@ -56,6 +57,16 @@
 #include <hyprland/src/output/Monitor.hpp>
 #include <hyprland/src/helpers/math/Math.hpp>
 #include <hyprland/src/state/MonitorState.hpp>
+#define private public     // m_currentlyHeldButtons, read-only here (as omarchy-crt's native pass)
+#include <hyprland/src/managers/input/InputManager.hpp>
+#undef private
+#include <hyprland/src/managers/SessionLockManager.hpp>
+#include <hyprland/src/pointer/PointerManager.hpp>
+#include <hyprland/src/desktop/state/ViewStateTracker.hpp>
+#include <hyprland/src/desktop/state/ViewHitTester.hpp>
+#include <hyprland/src/desktop/view/LayerSurface.hpp>
+#include <hyprland/protocols/wlr-layer-shell-unstable-v1.hpp>
+#include <hyprland/src/protocols/core/DataDevice.hpp>
 
 static HANDLE              PHANDLE = nullptr;
 static CHyprSignalListener g_stage;
@@ -96,6 +107,12 @@ struct SEngine {
     Clock::time_point perfSince;
     long     perfN = 0, perfActive = 0, perfFresh = 0;
     double   kSum = 0, kMax = 0, wallSum = 0, wallMax = 0;
+    // where the target was drawn last frame, in the layout's own (logical) pixels,
+    // for the pointer: it must be mapped through exactly the box the picture was bent in
+    CBox     box;
+    void*    boxMon  = nullptr;
+    bool     boxLive = false;    // false: nothing drawn yet, or the box was clipped by its monitor
+    bool     hooksOk = false;    // false: the pointer cannot be mapped, so nothing may be bent
 };
 static SEngine g;
 
@@ -167,7 +184,11 @@ static bool matches(const PHLWINDOW& w, const std::string& spec) {
 // False when the target is not being drawn here: then there is nothing to do.
 static bool where(PHLMONITOR m, int fbw, int fbh, SRect& r, void*& owner) {
     const std::string spec = line("target");
-    if (spec.empty()) { r = {0, 0, fbw, fbh}; owner = m.get(); return true; }
+    if (spec.empty()) {
+        r = {0, 0, fbw, fbh}; owner = m.get();
+        g.box = m->logicalBox(); g.boxMon = m.get(); g.boxLive = m->m_transform == WL_OUTPUT_TRANSFORM_NORMAL;
+        return true;
+    }
     for (auto const& w : Desktop::windowState()->windows()) {
         if (!w->m_isMapped || w->isHidden() || !g_pHyprRenderer->shouldRenderWindow(w, m) || !matches(w, spec))
             continue;
@@ -183,6 +204,10 @@ static bool where(PHLMONITOR m, int fbw, int fbh, SRect& r, void*& owner) {
         if (x1 - x0 < 16 || y1 - y0 < 16) return false;  // off this monitor, or too small to bother
         r = {x0, y0, x1 - x0, y1 - y0};
         owner = w.get();
+        // a box cut off by its monitor's edge is drawn as a smaller tile than the window:
+        // the pointer would be mapped through the wrong box, so it is not mapped at all
+        const bool whole = x0 == (int)std::floor(fb.x) && y0 == (int)std::floor(fb.y) && x1 == (int)std::ceil(fb.x + fb.w) && y1 == (int)std::ceil(fb.y + fb.h);
+        g.box = logical; g.boxMon = m.get(); g.boxLive = whole && m->m_transform == WL_OUTPUT_TRANSFORM_NORMAL;
         return true;
     }
     return false;
@@ -229,6 +254,8 @@ static void dress(bool phosphorOnly) {
         }
         pos = end + 1;
     }
+    // Never bend a picture the pointer cannot be mapped through.
+    if (!g.hooksOk) k.curv = 0;
     g.look = k;
 }
 
@@ -263,6 +290,9 @@ class CCudaPass : public IPassElement {
             } else {
                 SRect r;
                 void* owner = nullptr;
+                // This monitor is being drawn now: until where() finds the target on it again,
+                // the pointer is not mapped here (another workspace, a closed window, a move).
+                if (m.get() == g.boxMon) g.boxLive = false;
                 if (where(m, w, h, r, owner)) {
                     if (g.state == SEngine::NEW) { init(); g.state = SEngine::READY; }
                     CU(cuCtxSetCurrent(g.cu.ctx));
@@ -382,12 +412,96 @@ class CDump : public IPassElement {
     }
 };
 
+// ---- THE POINTER ------------------------------------------------------------
+// The picture bends; the pointer does not. A click must land on what is drawn under
+// the cursor, so while Hyprland works out what the pointer is over (its move routine),
+// "where is the pointer" answers with the point of the window that is DRAWN at the
+// pointer's true position. The drawn cursor and keybinds keep the true position.
+// This is omarchy-crt's native pass, ported; the curve comes from tube_map.h, the same
+// function the glass kernel calls, so the picture and the pointer cannot disagree.
+static CFunctionHook*          g_positionHook = nullptr;
+static CFunctionHook*          g_moveHook     = nullptr;
+static CFunctionHook*          g_layerHook    = nullptr;
+static std::optional<Vector2D> g_mapped;
+static std::optional<CBox>     g_pressBox;   // a press belongs to the box it landed in until release
+
+typedef Vector2D (*origPosition)(void*);
+typedef SP<CWLSurfaceResource> (*origLayerAt)(void*, const Vector2D&, std::vector<PHLLSREF>*, Vector2D*, PHLLS*, bool);
+typedef void (*origMove)(void*, uint32_t, bool, bool, std::optional<Vector2D>);
+
+static Vector2D hkPosition(void* self) { return g_mapped ? *g_mapped : ((origPosition)g_positionHook->m_original)(self); }
+
+// A mapped move has already found no layer under the true position; asked again with
+// the mapped one, a pointer in a gap between two cards would hit a card.
+static SP<CWLSurfaceResource> hkLayerAt(void* self, const Vector2D& pos, std::vector<PHLLSREF>* layers, Vector2D* coords, PHLLS* found, bool lock) {
+    if (g_mapped) return nullptr;
+    return ((origLayerAt)g_layerHook->m_original)(self, pos, layers, coords, found, lock);
+}
+
+// Screen point -> the window point drawn there. Past the box's edge the correction
+// stops growing and carries on at its edge value (a held press far outside a small
+// window would otherwise be thrown across the screen).
+static Vector2D through(const CBox& box, const Vector2D& p, bool clamp) {
+    const Vector2D in = {std::clamp(p.x, box.x, box.x + box.w), std::clamp(p.y, box.y, box.y + box.h)};
+    const TubeMap  tm = make_tube(g.look);
+    float          sx = 0, sy = 0;
+    tube_gather(tm, (float)((in.x - box.x) / box.w), (float)((in.y - box.y) / box.h), &sx, &sy);
+    Vector2D w = {sx, sy};
+    if (clamp) w = {std::clamp(w.x, 0.0, 0.999), std::clamp(w.y, 0.0, 0.999)};   // bezel and padding: the nearest point of the window
+    return p + box.pos() + Vector2D{w.x * box.w, w.y * box.h} - in;
+}
+
+static std::optional<Vector2D> mapped(const Vector2D& p) {
+    // Checked at the moment of the move, never cached: the instant the pass stands
+    // down (off, its time, a failure) nothing is mapped any more.
+    const bool on = g.state == SEngine::READY && g.boxLive && g.look.curv > 0 && !flag("off") && !flag("input-flat");
+    if (!on || g_pSessionLockManager->isSessionLocked() || g_pInputManager->isConstrained()) {
+        g_pressBox.reset();
+        return std::nullopt;
+    }
+    if (!g_pInputManager->m_currentlyHeldButtons.empty() && !PROTO::data->dndActive())
+        return g_pressBox ? std::optional{through(*g_pressBox, p, false)} : std::nullopt;
+    g_pressBox.reset();
+    for (auto const& m : State::monitorState()->monitors()) {
+        if (m.get() != g.boxMon || !m->logicalBox().containsPoint(p)) continue;
+        Vector2D coords;
+        PHLLS    layer;
+        for (auto const lvl : {ZWLR_LAYER_SHELL_V1_LAYER_OVERLAY, ZWLR_LAYER_SHELL_V1_LAYER_TOP})
+            if (Desktop::viewState()->hitTest().layerSurfaceAt(p, &m->m_layerSurfaceLayers[lvl], &coords, &layer))
+                return std::nullopt;   // a flat layer on top is hit where it is drawn
+        if (!g.box.containsPoint(p)) return std::nullopt;
+        g_pressBox = g.box;
+        return through(g.box, p, true);
+    }
+    return std::nullopt;
+}
+
+static void hkMove(void* self, uint32_t time, bool refocus, bool mouse, std::optional<Vector2D> override_) {
+    if (!override_) g_mapped = mapped(((origPosition)g_positionHook->m_original)(Pointer::mgr().get()));
+    ((origMove)g_moveHook->m_original)(self, time, refocus, mouse, override_);
+    g_mapped.reset();
+}
+
+static CFunctionHook* hookNamed(const std::string& name, const std::string& demangledHas, void* to) {
+    for (auto const& f : HyprlandAPI::findFunctionsByName(PHANDLE, name))
+        if (f.demangled.contains(demangledHas)) {
+            auto* h = HyprlandAPI::createFunctionHook(PHANDLE, f.address, to);
+            if (h && h->hook()) return h;
+        }
+    return nullptr;
+}
+
 APICALL EXPORT std::string PLUGIN_API_VERSION() { return HYPRLAND_API_VERSION; }
 
 APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
     PHANDLE = handle;
     if (std::string(__hyprland_api_get_hash()) != std::string(__hyprland_api_get_client_hash()))
         throw std::runtime_error("cuda-pass: built for another Hyprland");
+    g_positionHook = hookNamed("position", "CPointerManager::position", (void*)hkPosition);
+    g_layerHook    = hookNamed("layerSurfaceAt", "CViewHitTester::layerSurfaceAt", (void*)hkLayerAt);
+    g_moveHook     = hookNamed("mouseMoveUnified", "CInputManager::mouseMoveUnified", (void*)hkMove);
+    g.hooksOk      = g_positionHook && g_layerHook && g_moveHook;
+    note(g.hooksOk ? "pointer: mapped through the glass" : "pointer: could not hook Hyprland's pointer routines; the glass stays flat so clicks stay true");
     g_stage = Event::bus()->m_events.render.stage.listen([](eRenderStage stage) {
         // Ask for another frame only while something is still moving (the phosphor's own
         // flag, or the glass's clock), and only on the monitor the target is on.
@@ -434,6 +548,8 @@ static void teardown() {
 
 APICALL EXPORT void PLUGIN_EXIT() {
     g_stage.reset();
+    g_mapped.reset();
+    g.state = SEngine::DONE;   // nothing is mapped from here on
     teardown();
     // Hyprland keeps a frame's pass elements until the next frame begins, and would
     // then destroy ours with code that has been unloaded.

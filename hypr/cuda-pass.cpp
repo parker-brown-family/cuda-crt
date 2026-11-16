@@ -273,7 +273,11 @@ class CCudaPass : public IPassElement {
             g.active = false;
             note(std::string("DEAD, passing frames through untouched: ") + e.what());
         }
-        std::ofstream(dir() + "/frames.now") << g.frames << " " << (g.active ? 1 : 0) << " " << (int)g.state << "\n";
+        // frame count, still-fading, state: written only when it changes, so a pass that is
+        // armed and waiting for its window does not touch the disk on every frame
+        static std::string wrote;
+        const std::string  now = std::to_string(g.frames) + " " + (g.active ? "1" : "0") + " " + std::to_string((int)g.state);
+        if (now != wrote) { std::ofstream(dir() + "/frames.now") << now << "\n"; wrote = now; }
         glBindFramebuffer(GL_FRAMEBUFFER, fb);
         glBindTexture(GL_TEXTURE_2D, tex);
         glActiveTexture(active);

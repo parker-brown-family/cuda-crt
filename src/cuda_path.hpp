@@ -81,6 +81,10 @@ struct CudaSurf {
         for (auto &g : glow) g.destroy();
         surf = 0; tex = 0;
     }
+    // Use a w x h corner of what is already allocated, starting fresh. A window that
+    // is being resized changes size every frame; this costs nothing, where a new
+    // allocation per frame would. Only valid up to the size given to create().
+    void use(int w_, int h_) { w = w_; h = h_; gw = (w + 7) / 8; gh = (h + 7) / 8; fresh = true; }
     size_t bytes() const { return (size_t)w * h * (v2 ? 8 : 16) + (size_t)gw * gh * 32; }
 };
 

@@ -29,7 +29,10 @@
 //   keep-drawing   damage every frame (a capture needs a frame)
 //   time-pass      finish the GPU either side of the pass and log its wall time
 //   dump-now       write the finished frame to frame.rgba / frame.txt
-// It writes: pass.log, pass-ms.txt, frames.now, frame.rgba, frame.txt.
+// It writes: pass.log, frames.now, and perf.csv (one row every five seconds while
+// it runs: passes per second, kernel time from CUDA's own timer, the pass's wall
+// time, and how often the phosphor was still fading); and, when asked,
+// pass-ms.txt, frame.rgba, frame.txt.
 //
 // It follows the shape of omarchy-crt's native/crt-pass.cpp, which is the pass
 // people actually run. This one is a proof: load it by hand, unload it by hand.
@@ -85,6 +88,11 @@ struct SEngine {
     bool     active = false, failedOnce = false;
     long     frames = 0, timed = 0;
     double   msSum = 0, msMax = 0;
+    // always-on tracking, cheap: no extra waiting on the GPU
+    CUevent  ev0 = nullptr, ev1 = nullptr;
+    Clock::time_point perfSince;
+    long     perfN = 0, perfActive = 0, perfFresh = 0;
+    double   kSum = 0, kMax = 0, wallSum = 0, wallMax = 0;
 };
 static SEngine g;
 
@@ -107,6 +115,7 @@ static void target(GLuint& tex, GLuint& fb, int w, int h) {
 static void release() {
     g.shIn.unreg(); g.shOut.unreg();
     g.surf.destroy();
+    g.surf.w = g.surf.h = 0;
     g.owner = nullptr;
     if (g.inTex) { glDeleteFramebuffers(1, &g.inFb); glDeleteTextures(1, &g.inTex); glDeleteFramebuffers(1, &g.outFb); glDeleteTextures(1, &g.outTex); }
     g.inTex = g.inFb = g.outTex = g.outFb = 0;
@@ -119,6 +128,7 @@ static void resize(int w, int h) {
     target(g.outTex, g.outFb, w, h);
     g.shIn.reg(g.inTex, CU_GRAPHICS_REGISTER_FLAGS_READ_ONLY);
     g.shOut.reg(g.outTex, CU_GRAPHICS_REGISTER_FLAGS_SURFACE_LDST);
+    g.surf.create(w, h, true);   // room for the largest window this framebuffer can hold; see CudaSurf::use
     g.w = w; g.h = h;
     note("framebuffer " + std::to_string(w) + "x" + std::to_string(h) + ": two GLES textures registered with CUDA");
 }
@@ -132,9 +142,11 @@ static void init() {
         g.cu.init(dev);
         g.cu.load_all(root);
         g.path.init(g.cu);
+        CU(cuEventCreate(&g.ev0, CU_EVENT_DEFAULT));
+        CU(cuEventCreate(&g.ev1, CU_EVENT_DEFAULT));
         g.cudaUp = true;
     }
-    g.start = g.last = g.liveSince = Clock::now();
+    g.start = g.last = g.liveSince = g.perfSince = Clock::now();
     note("ready: " + g.cu.device_name + ", CUDA driver API " + g.cu.driver_version + ", NVRTC " + g.cu.nvrtc_version + ", GL " + (const char*)glGetString(GL_VERSION) +
          ", kernel files compiled this start: " + std::to_string(g.cu.compiled) + ", target: " + (line("target").empty() ? "the whole monitor" : line("target")) +
          ", look: " + (line("look").empty() ? "tube" : line("look")));
@@ -225,10 +237,13 @@ class CCudaPass : public IPassElement {
                     CU(cuCtxSetCurrent(g.cu.ctx));
                     if (w != g.w || h != g.h) resize(w, h);
                     if (owner != g.owner || r.w != g.surf.w || r.h != g.surf.h) {  // a new owner or a new size starts fresh
-                        g.surf.destroy();
-                        g.surf.create(r.w, r.h, true);
+                        // One line when the target changes hands or settles at a new size, not one per
+                        // frame of a resize animation: a fullscreen toggle is a dozen sizes in a row.
+                        if (owner != g.owner)
+                            note("phosphor " + std::to_string(r.w) + "x" + std::to_string(r.h) + " at " + std::to_string(r.x) + "," + std::to_string(r.y) + " on a " + std::to_string(w) + "x" + std::to_string(h) + " framebuffer");
+                        g.surf.use(r.w, r.h);
                         g.owner = owner;
-                        note("phosphor " + std::to_string(r.w) + "x" + std::to_string(r.h) + " at " + std::to_string(r.x) + "," + std::to_string(r.y) + " on a " + std::to_string(w) + "x" + std::to_string(h) + " framebuffer");
+                        g.perfFresh++;
                     }
                     g.monitor = m.get();
                     dress(line("look") == "phosphor");
@@ -248,10 +263,18 @@ class CCudaPass : public IPassElement {
 
                     g.path.begin(g.shIn, &g.shOut);
                     if (flag("fail") && !g.failedOnce) { g.failedOnce = true; throw std::runtime_error("injected failure, mid-frame, textures mapped"); }
-                    g.path.update_v2(g.surf, r.x, r.y, make_step_v2(g.look.phosphor, g.look.burn, dt, g.surf.fresh));
+                    PhosphorStepV2 step = make_step_v2(g.look.phosphor, g.look.burn, dt, g.surf.fresh);
+                    // A fresh corner of a reused surface may hold an older window's ghost: on a
+                    // fresh frame the ghost adopts the picture too, so nothing stale can show.
+                    if (g.surf.fresh) step.a_burn_rise = step.a_burn_decay = 1.0f;
+                    CU(cuEventRecord(g.ev0, 0));
+                    g.path.update_v2(g.surf, r.x, r.y, step);
                     g.path.glow(g.surf, g.look.glow_knee);
                     g.path.optics(g.surf, r.x, r.y, make_optics(g.look, t, r.h, true));
-                    g.active = g.path.active_result();
+                    CU(cuEventRecord(g.ev1, 0));
+                    g.active = g.path.active_result();   // waits for the kernels, so the events below are complete
+                    float kms = 0;
+                    CU(cuEventElapsedTime(&kms, g.ev0, g.ev1));
                     g.path.end();
 
                     glBindFramebuffer(GL_READ_FRAMEBUFFER, g.outFb);
@@ -264,6 +287,21 @@ class CCudaPass : public IPassElement {
                         std::ofstream(dir() + "/pass-ms.txt") << g.msSum / g.timed << " " << g.msMax << " " << g.timed << " " << r.w << "x" << r.h << "\n";
                     }
                     g.frames++;
+                    // Tracking: kernel time from CUDA's own events, and this function's wall time
+                    // from the copy-in to here. Summed, and written out every five seconds.
+                    const double wall = std::chrono::duration<double, std::milli>(Clock::now() - t0).count();
+                    g.perfN++; g.perfActive += g.active; g.kSum += kms; g.kMax = std::max(g.kMax, (double)kms); g.wallSum += wall; g.wallMax = std::max(g.wallMax, wall);
+                    const double span = std::chrono::duration<double>(Clock::now() - g.perfSince).count();
+                    if (span >= 5.0) {
+                        char row[256];
+                        snprintf(row, sizeof row, "%ld,%.1f,%.3f,%.3f,%.3f,%.3f,%.0f,%dx%d,%ld", (long)time(nullptr), g.perfN / span, g.kSum / g.perfN, g.kMax, g.wallSum / g.perfN, g.wallMax,
+                                 100.0 * g.perfActive / g.perfN, r.w, r.h, g.perfFresh);
+                        const bool isNew = access((dir() + "/perf.csv").c_str(), F_OK) != 0;
+                        std::ofstream f(dir() + "/perf.csv", std::ios::app);
+                        if (isNew) f << "unix_time,passes_per_s,kernels_ms_mean,kernels_ms_max,pass_wall_ms_mean,pass_wall_ms_max,percent_frames_still_fading,window_px,fresh_starts\n";
+                        f << row << "\n";
+                        g.perfSince = Clock::now(); g.perfN = g.perfActive = g.perfFresh = 0; g.kSum = g.kMax = g.wallSum = g.wallMax = 0;
+                    }
                 }
             }
         } catch (std::exception& e) {

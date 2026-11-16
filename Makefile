@@ -21,10 +21,10 @@ bin/probe: src/probe.cpp src/glrt.hpp src/cudart.hpp phosphor_params.h
 bin/stage1_test: src/stage1_test.cpp src/cudart.hpp src/cpu_ref.hpp phosphor_params.h
 	@mkdir -p bin
 	$(CXX) $(CXXFLAGS) $< -o $@ $(LDCUDA)
-bin/stage2_bench: src/stage2_bench.cpp src/pipelines.hpp src/look.hpp src/cuda_path.hpp src/glrt.hpp src/cudart.hpp phosphor_params.h phosphor_half.h tube_map.h kernels/phosphor.cu
+bin/stage2_bench: src/stage2_bench.cpp src/pipelines.hpp src/look.hpp src/cuda_path.hpp src/glrt.hpp src/cudart.hpp phosphor_params.h phosphor_half.h tube_map.h kernels/phosphor.cu kernels/glass.cu
 	@mkdir -p bin
 	$(CXX) $(CXXFLAGS) $< -o $@ $(LDCUDA) $(LDGL)
-bin/crt_render: src/crt_render.cpp kernels/glass.cu src/pipelines.hpp src/look.hpp src/cuda_path.hpp src/glrt.hpp src/cudart.hpp phosphor_params.h phosphor_half.h tube_map.h kernels/phosphor.cu
+bin/crt_render: src/crt_render.cpp kernels/glass.cu src/pipelines.hpp src/look.hpp src/cuda_path.hpp src/glrt.hpp src/cudart.hpp phosphor_params.h phosphor_half.h tube_map.h kernels/phosphor.cu kernels/glass.cu
 	@mkdir -p bin
 	$(CXX) $(CXXFLAGS) $< -o $@ $(LDCUDA) $(LDGL)
 

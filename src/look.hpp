@@ -26,6 +26,14 @@ struct Look {
 
 // The curve as the picture and the pointer must both see it. Anything that maps a
 // pointer through the glass builds its TubeMap here, from the same Look the kernel got.
+// This frame's transient motion, from the same OpticsParams the kernel received.
+inline TubeMotion make_motion(const OpticsParams &o) {
+    TubeMotion v;
+    v.degauss = o.degauss; v.degauss_phase = o.degauss_phase; v.tracking = o.tracking; v.band_center = o.band_center; v.band_h = o.band_h;
+    v.track_bend = o.track_bend; v.track_noise = o.track_noise; v.jiggle_px = o.jiggle_px; v.seed = o.seed;
+    return v;
+}
+
 inline TubeMap make_tube(const Look &k) {
     TubeMap m;
     m.k1 = k.k1 * k.curv; m.k2 = k.k2 * k.curv; m.core = k.core; m.inset = k.inset;

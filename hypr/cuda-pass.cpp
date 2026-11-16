@@ -27,6 +27,7 @@
 //                  decay=120 (ms). Read every frame: rewrite it and the window changes
 //   off            stand the pass down and release its textures
 //   input-flat     keep the picture bent but stop mapping the pointer (a test's control)
+//   freeze         a number of seconds: hold the clock there (the bar, the jiggle) for a test
 //   ttl            a number of seconds: stand down by itself after that long
 //   fail           throw in the middle of a frame, once, to prove the fallback
 //   keep-drawing   damage every frame (a capture needs a frame)
@@ -105,8 +106,13 @@ struct SEngine {
     double   msSum = 0, msMax = 0;
     // always-on tracking, cheap: no extra waiting on the GPU
     CUevent  ev0 = nullptr, ev1 = nullptr;
+    // The "still fading?" answer and the kernels' time arrive one frame late, so the
+    // compositor never waits for the GPU: the flag is copied to pinned memory after the
+    // kernels, and read at the start of the next frame once ev1 says it has landed.
+    int*     activeHost = nullptr;
+    bool     pending = false;
     Clock::time_point perfSince;
-    long     perfN = 0, perfActive = 0, perfFresh = 0;
+    long     perfN = 0, perfActive = 0, perfFresh = 0, kN = 0;
     double   kSum = 0, kMax = 0, wallSum = 0, wallMax = 0;
     // where the target was drawn last frame, in the layout's own (logical) pixels,
     // for the pointer: it must be mapped through exactly the box the picture was bent in
@@ -116,6 +122,8 @@ struct SEngine {
     bool     boxFullscreen = false;   // the target covers its monitor: Hyprland then ignores TOP layers for input
     std::string why;             // the pointer's last decision, written to pointer.why when it changes
     bool     hooksOk = false;    // false: the pointer cannot be mapped, so nothing may be bent
+    TubeMotion motion = {};      // the last frame's transient motion, for the pointer
+    float    tileW = 0, tileH = 0;   // the last frame's tile, framebuffer pixels
 };
 static SEngine g;
 
@@ -167,6 +175,8 @@ static void init() {
         g.path.init(g.cu);
         CU(cuEventCreate(&g.ev0, CU_EVENT_DEFAULT));
         CU(cuEventCreate(&g.ev1, CU_EVENT_DEFAULT));
+        CU(cuMemHostAlloc((void**)&g.activeHost, sizeof(int), 0));
+        *g.activeHost = 1;
         g.cudaUp = true;
     }
     g.start = g.last = g.liveSince = g.perfSince = Clock::now();
@@ -224,6 +234,10 @@ static bool where(PHLMONITOR m, int fbw, int fbh, SRect& r, void*& owner) {
 static void dress(bool phosphorOnly) {
     Look k;  // the lab's defaults
     k.track_rest = 2.0f; k.track_sweep = 5.0f; k.degauss_at = 1.0f;
+    // On a desktop the rim must not sit on a window's own edges (its controls live
+    // there), so the picture is drawn 6% smaller with the curve across the whole edge.
+    // Proven with real clicks in hypr/prove-aim; `set` can still change either.
+    k.core = 0.0f; k.inset = 0.06f;
     if (phosphorOnly) {
         // no glass of our own: nothing bends, nothing sweeps, nothing is driven by the
         // clock. What is left is the light's memory, so an idle window owes no frames.
@@ -326,24 +340,39 @@ class CCudaPass : public IPassElement {
                     const bool timed = flag("time-pass");
                     if (timed) glFinish();
                     const auto   t0 = Clock::now();
-                    const float  t  = std::chrono::duration<float>(t0 - g.start).count();
+                    // `freeze`: a fixed clock (seconds) for tests, so the bar holds still between a capture and a click
+                    const std::string fz = line("freeze");
+                    const float  t  = fz.empty() ? std::chrono::duration<float>(t0 - g.start).count() : (float)atof(fz.c_str());
                     const double dt = std::min(0.25, std::max(0.002, std::chrono::duration<double>(t0 - g.last).count()));
                     g.last = t0;
 
+                    // Last frame's answers, if they have landed. If not (the GPU is behind),
+                    // assume still fading: one extra frame is the cost of never waiting.
+                    float kms = -1;
+                    if (g.pending && cuEventQuery(g.ev1) == CUDA_SUCCESS) {
+                        g.active = *g.activeHost != 0;
+                        CU(cuEventElapsedTime(&kms, g.ev0, g.ev1));
+                        g.pending = false;
+                    } else if (g.pending) {
+                        g.active = true;
+                    }
                     g.path.begin(g.shIn, &g.shOut);
                     if (flag("fail") && !g.failedOnce) { g.failedOnce = true; throw std::runtime_error("injected failure, mid-frame, textures mapped"); }
                     PhosphorStepV2 step = make_step_v2(g.look.phosphor, g.look.burn, dt, g.surf.fresh);
                     // A fresh corner of a reused surface may hold an older window's ghost: on a
                     // fresh frame the ghost adopts the picture too, so nothing stale can show.
                     if (g.surf.fresh) step.a_burn_rise = step.a_burn_decay = 1.0f;
-                    CU(cuEventRecord(g.ev0, 0));
+                    if (!g.pending) CU(cuEventRecord(g.ev0, 0));   // never re-record ev0 under an unread ev1
                     g.path.update_v2(g.surf, r.x, r.y, step);
                     g.path.glow(g.surf, g.look.glow_knee);
-                    g.path.optics(g.surf, r.x, r.y, make_optics(g.look, t, r.h, true));
-                    CU(cuEventRecord(g.ev1, 0));
-                    g.active = g.path.active_result();   // waits for the kernels, so the events below are complete
-                    float kms = 0;
-                    CU(cuEventElapsedTime(&kms, g.ev0, g.ev1));
+                    const OpticsParams op = make_optics(g.look, t, r.h, true);
+                    g.path.optics(g.surf, r.x, r.y, op);
+                    g.motion = make_motion(op); g.tileW = (float)r.w; g.tileH = (float)r.h;
+                    if (!g.pending) {
+                        CU(cuMemcpyDtoHAsync(g.activeHost, g.path.d_active, sizeof(int), 0));
+                        CU(cuEventRecord(g.ev1, 0));
+                        g.pending = true;
+                    }
                     g.path.end();
 
                     glBindFramebuffer(GL_READ_FRAMEBUFFER, g.outFb);
@@ -359,17 +388,18 @@ class CCudaPass : public IPassElement {
                     // Tracking: kernel time from CUDA's own events, and this function's wall time
                     // from the copy-in to here. Summed, and written out every five seconds.
                     const double wall = std::chrono::duration<double, std::milli>(Clock::now() - t0).count();
-                    g.perfN++; g.perfActive += g.active; g.kSum += kms; g.kMax = std::max(g.kMax, (double)kms); g.wallSum += wall; g.wallMax = std::max(g.wallMax, wall);
+                    g.perfN++; g.perfActive += g.active; g.wallSum += wall; g.wallMax = std::max(g.wallMax, wall);
+                    if (kms >= 0) { g.kN++; g.kSum += kms; g.kMax = std::max(g.kMax, (double)kms); }
                     const double span = std::chrono::duration<double>(Clock::now() - g.perfSince).count();
                     if (span >= 5.0) {
                         char row[256];
-                        snprintf(row, sizeof row, "%ld,%.1f,%.3f,%.3f,%.3f,%.3f,%.0f,%dx%d,%ld", (long)time(nullptr), g.perfN / span, g.kSum / g.perfN, g.kMax, g.wallSum / g.perfN, g.wallMax,
+                        snprintf(row, sizeof row, "%ld,%.1f,%.3f,%.3f,%.3f,%.3f,%.0f,%dx%d,%ld", (long)time(nullptr), g.perfN / span, g.kN ? g.kSum / g.kN : -1.0, g.kMax, g.wallSum / g.perfN, g.wallMax,
                                  100.0 * g.perfActive / g.perfN, r.w, r.h, g.perfFresh);
                         const bool isNew = access((dir() + "/perf.csv").c_str(), F_OK) != 0;
                         std::ofstream f(dir() + "/perf.csv", std::ios::app);
                         if (isNew) f << "unix_time,passes_per_s,kernels_ms_mean,kernels_ms_max,pass_wall_ms_mean,pass_wall_ms_max,percent_frames_still_fading,window_px,fresh_starts\n";
                         f << row << "\n";
-                        g.perfSince = Clock::now(); g.perfN = g.perfActive = g.perfFresh = 0; g.kSum = g.kMax = g.wallSum = g.wallMax = 0;
+                        g.perfSince = Clock::now(); g.perfN = g.perfActive = g.perfFresh = g.kN = 0; g.kSum = g.kMax = g.wallSum = g.wallMax = 0;
                     }
                 }
             }
@@ -452,8 +482,10 @@ static SP<CWLSurfaceResource> hkLayerAt(void* self, const Vector2D& pos, std::ve
 static Vector2D through(const CBox& box, const Vector2D& p, bool clamp) {
     const Vector2D in = {std::clamp(p.x, box.x, box.x + box.w), std::clamp(p.y, box.y, box.y + box.h)};
     const TubeMap  tm = make_tube(g.look);
-    float          sx = 0, sy = 0;
-    tube_gather(tm, (float)((in.x - box.x) / box.w), (float)((in.y - box.y) / box.h), &sx, &sy);
+    float          lx = (float)((in.x - box.x) / box.w), ly = (float)((in.y - box.y) / box.h), sx = 0, sy = 0, bar = 0, tear = 0;
+    // the moment's motion first (the bar, the jiggle, the wobble), exactly as the kernel does
+    if (g.tileW > 0) tube_disturb(tm, g.motion, g.tileW, g.tileH, &lx, &ly, &bar, &tear);
+    tube_gather(tm, lx, ly, &sx, &sy);
     Vector2D w = {sx, sy};
     if (clamp) w = {std::clamp(w.x, 0.0, 0.999), std::clamp(w.y, 0.0, 0.999)};   // bezel and padding: the nearest point of the window
     return p + box.pos() + Vector2D{w.x * box.w, w.y * box.h} - in;
@@ -576,6 +608,8 @@ static void teardown() {
     cuCtxSynchronize();
     g.path.abandon();          // unmaps anything still mapped
     release();                 // unregisters and deletes the textures, frees the surface
+    if (g.activeHost) cuMemFreeHost(g.activeHost);
+    g.activeHost = nullptr;
     if (g.ev0) cuEventDestroy(g.ev0);
     if (g.ev1) cuEventDestroy(g.ev1);
     if (g.path.d_active) cuMemFree(g.path.d_active);

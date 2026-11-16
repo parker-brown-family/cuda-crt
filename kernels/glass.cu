@@ -141,29 +141,14 @@ rim_done:;
 
     v2 L = V(clamp01(l2.x), clamp01(l2.y));
     float r2 = (L.x - 0.5f) * (L.x - 0.5f) + (L.y - 0.5f) * (L.y - 0.5f);
-    // degauss: for a second after power-on the PICTURE swims and its colours part,
-    // while the glass (rim, scanlines, vignette) stays where it is
+    // The bar's bend and tearing, the jiggle and the switch-on wobble move the picture
+    // for a moment. tube_map.h does it, so the pointer can follow the same picture.
     float dg = o.degauss;
-    bool moved = false;
-    if (dg > 0.0f) {
-        l0.x += dg * 0.012f * sinf(o.degauss_phase + l0.y * 11.0f);
-        l0.y += dg * 0.007f * cosf(o.degauss_phase * 1.31f + l0.x * 9.0f);
-        moved = true;
-    }
-    // how deep this row is inside the tracking bar, 0 outside .. 1 at its centre
+    TubeMotion mo;
+    mo.degauss = o.degauss; mo.degauss_phase = o.degauss_phase; mo.tracking = o.tracking; mo.band_center = o.band_center;
+    mo.band_h = o.band_h; mo.track_bend = o.track_bend; mo.track_noise = o.track_noise; mo.jiggle_px = o.jiggle_px; mo.seed = o.seed;
     float bar = 0.0f, tear = 0.0f;
-    if (o.tracking > 0.001f && o.band_center > -1.0e8f)
-        bar = 1.0f - clamp01(fabsf(L.y * fh - o.band_center) / (o.band_h * 0.5f));
-    if (bar > 0.0f && (o.track_bend > 0.0f || o.track_noise > 0.0f)) {
-        // one hash per scanline per frame: neighbouring lines tear by different amounts
-        float hy = sinf(floorf(L.y * fh) * 12.9898f + o.seed * 78.233f) * 43758.5453f;
-        tear = hy - floorf(hy) - 0.5f;
-        float push = o.track_bend * bar * bar * sinf(L.y * fh * 0.045f + o.seed * 0.9f)
-                   + o.track_noise * bar * tear * 9.0f;
-        l0.x += push / fw;
-        moved = true;
-    }
-    if (o.jiggle_px != 0.0f) { l0.y += o.jiggle_px / fh; moved = true; }
+    bool moved = tube_disturb(tm, mo, fw, fh, &l0.x, &l0.y, &bar, &tear) != 0;
     v2 lp = moved ? tube_warp(l0, tm) : l2;
     // outside the window (the padding an inset leaves, or past the bend) there is no picture
     float in_window = (o.inset > 0.0f && (lp.x < 0.0f || lp.x > 1.0f || lp.y < 0.0f || lp.y > 1.0f)) ? 0.0f : 1.0f;

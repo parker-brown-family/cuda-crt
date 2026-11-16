@@ -1,0 +1,390 @@
+{
+ "failed": 0,
+ "checks": [
+  {
+   "pass": true,
+   "check": "G. with the bar bending and tearing across the middle, mapped: every spot hit where it is drawn",
+   "measured": "13 of 13 hit; clicks landed 2.3 px from the target's centre on average, 3.6 at worst; the middle row (in the bar) [3.6, 3.6, 2.2]"
+  },
+  {
+   "pass": true,
+   "check": "G-control (information): the same clicks unmapped",
+   "measured": "0 of 13 hit; middle row [(False, 78.0), (False, 50.0), (False, 13.0)]"
+  }
+ ],
+ "G": [
+  {
+   "spot": 0,
+   "drawn": [
+    122.8,
+    90.0
+   ],
+   "page_xy": [
+    17,
+    17
+   ],
+   "hit": true,
+   "visible": true,
+   "click_error_px": 1.0
+  },
+  {
+   "spot": 1,
+   "drawn": [
+    1476.4,
+    90.0
+   ],
+   "page_xy": [
+    1539,
+    17
+   ],
+   "hit": true,
+   "visible": true,
+   "click_error_px": 2.2
+  },
+  {
+   "spot": 2,
+   "drawn": [
+    122.9,
+    909.9
+   ],
+   "page_xy": [
+    17,
+    939
+   ],
+   "hit": true,
+   "visible": true,
+   "click_error_px": 1.4
+  },
+  {
+   "spot": 3,
+   "drawn": [
+    1476.4,
+    910.0
+   ],
+   "page_xy": [
+    1539,
+    939
+   ],
+   "hit": true,
+   "visible": true,
+   "click_error_px": 2.2
+  },
+  {
+   "spot": 4,
+   "drawn": [
+    799.3,
+    77.5
+   ],
+   "page_xy": [
+    778,
+    17
+   ],
+   "hit": true,
+   "visible": true,
+   "click_error_px": 1.0
+  },
+  {
+   "spot": 5,
+   "drawn": [
+    799.3,
+    922.5
+   ],
+   "page_xy": [
+    778,
+    939
+   ],
+   "hit": true,
+   "visible": true,
+   "click_error_px": 2.2
+  },
+  {
+   "spot": 6,
+   "drawn": [
+    117.4,
+    499.4
+   ],
+   "page_xy": [
+    17,
+    478
+   ],
+   "hit": true,
+   "visible": true,
+   "click_error_px": 3.6
+  },
+  {
+   "spot": 7,
+   "drawn": [
+    1510.6,
+    499.3
+   ],
+   "page_xy": [
+    1539,
+    478
+   ],
+   "hit": true,
+   "visible": true,
+   "click_error_px": 3.6
+  },
+  {
+   "spot": 8,
+   "drawn": [
+    813.4,
+    499.9
+   ],
+   "page_xy": [
+    778,
+    478
+   ],
+   "hit": true,
+   "visible": true,
+   "click_error_px": 2.2
+  },
+  {
+   "spot": 9,
+   "drawn": [
+    446.3,
+    285.2
+   ],
+   "page_xy": [
+    398,
+    248
+   ],
+   "hit": true,
+   "visible": true,
+   "click_error_px": 2.8
+  },
+  {
+   "spot": 10,
+   "drawn": [
+    1153.2,
+    285.0
+   ],
+   "page_xy": [
+    1159,
+    248
+   ],
+   "hit": true,
+   "visible": true,
+   "click_error_px": 2.8
+  },
+  {
+   "spot": 11,
+   "drawn": [
+    446.1,
+    713.9
+   ],
+   "page_xy": [
+    398,
+    709
+   ],
+   "hit": true,
+   "visible": true,
+   "click_error_px": 2.8
+  },
+  {
+   "spot": 12,
+   "drawn": [
+    1153.2,
+    713.8
+   ],
+   "page_xy": [
+    1159,
+    709
+   ],
+   "hit": true,
+   "visible": true,
+   "click_error_px": 2.2
+  }
+ ],
+ "G_control": [
+  {
+   "spot": 0,
+   "drawn": [
+    122.6,
+    90.0
+   ],
+   "page_xy": [
+    17,
+    17
+   ],
+   "hit": false,
+   "visible": true,
+   "click_error_px": 98.3
+  },
+  {
+   "spot": 1,
+   "drawn": [
+    1476.5,
+    90.0
+   ],
+   "page_xy": [
+    1539,
+    17
+   ],
+   "hit": false,
+   "visible": true,
+   "click_error_px": 98.3
+  },
+  {
+   "spot": 2,
+   "drawn": [
+    122.9,
+    909.9
+   ],
+   "page_xy": [
+    17,
+    939
+   ],
+   "hit": false,
+   "visible": true,
+   "click_error_px": 98.3
+  },
+  {
+   "spot": 3,
+   "drawn": [
+    1476.5,
+    910.0
+   ],
+   "page_xy": [
+    1539,
+    939
+   ],
+   "hit": false,
+   "visible": true,
+   "click_error_px": 98.3
+  },
+  {
+   "spot": 4,
+   "drawn": [
+    799.3,
+    77.5
+   ],
+   "page_xy": [
+    778,
+    17
+   ],
+   "hit": false,
+   "visible": true,
+   "click_error_px": 39.0
+  },
+  {
+   "spot": 5,
+   "drawn": [
+    799.4,
+    922.4
+   ],
+   "page_xy": [
+    778,
+    939
+   ],
+   "hit": false,
+   "visible": true,
+   "click_error_px": 39.0
+  },
+  {
+   "spot": 6,
+   "drawn": [
+    117.3,
+    499.4
+   ],
+   "page_xy": [
+    17,
+    478
+   ],
+   "hit": false,
+   "visible": true,
+   "click_error_px": 78.0
+  },
+  {
+   "spot": 7,
+   "drawn": [
+    1510.7,
+    499.4
+   ],
+   "page_xy": [
+    1539,
+    478
+   ],
+   "hit": false,
+   "visible": true,
+   "click_error_px": 50.0
+  },
+  {
+   "spot": 8,
+   "drawn": [
+    813.2,
+    499.9
+   ],
+   "page_xy": [
+    778,
+    478
+   ],
+   "hit": false,
+   "visible": true,
+   "click_error_px": 13.0
+  },
+  {
+   "spot": 9,
+   "drawn": [
+    446.4,
+    285.3
+   ],
+   "page_xy": [
+    398,
+    248
+   ],
+   "hit": false,
+   "visible": true,
+   "click_error_px": 30.0
+  },
+  {
+   "spot": 10,
+   "drawn": [
+    1153.2,
+    285.0
+   ],
+   "page_xy": [
+    1159,
+    248
+   ],
+   "hit": false,
+   "visible": true,
+   "click_error_px": 31.8
+  },
+  {
+   "spot": 11,
+   "drawn": [
+    446.1,
+    713.9
+   ],
+   "page_xy": [
+    398,
+    709
+   ],
+   "hit": false,
+   "visible": true,
+   "click_error_px": 31.1
+  },
+  {
+   "spot": 12,
+   "drawn": [
+    1153.1,
+    713.8
+   ],
+   "page_xy": [
+    1159,
+    709
+   ],
+   "hit": false,
+   "visible": true,
+   "click_error_px": 32.8
+  }
+ ],
+ "log": [
+  "pointer: mapped through the glass",
+  "CUDA device that owns this GL context: 0",
+  "ready: NVIDIA GeForce RTX 3080 Laptop GPU, CUDA driver API 13.4, NVRTC 12.9, GL OpenGL ES 3.2 NVIDIA 615.78.08, kernel files compiled this start: 0, target: title:aim , look: tube",
+  "framebuffer 2560x1600: two GLES textures registered with CUDA",
+  "phosphor 2490x1530 at 35,35 on a 2560x1600 framebuffer"
+ ]
+}

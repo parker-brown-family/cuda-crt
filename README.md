@@ -87,13 +87,39 @@ with no window):
 tools/tube.sh
 ```
 
-Inside Hyprland. A plugin runs the same kernels in a real Hyprland, in a sealed
-seat that cannot reach a live desktop (it needs a checkout of omarchy-crt for
-that seat; point `OMARCHY_CRT` at it). Nine checks: texture sharing, the
-picture, the cost of a pass, idle, a failure mid-frame, unload:
+## Inside Hyprland
+
+`hypr/cuda-pass.cpp` is a Hyprland 0.56 plugin that runs the same kernels on one
+window (or a whole monitor), after the windows are drawn and before the bar and
+notifications. Clicks are mapped through the glass: the cursor stays where your
+hand puts it, and while Hyprland works out what the pointer is over it is given
+the point of the window drawn under the cursor, from the same `tube_map.h` the
+picture is bent with (the tracking bar, jiggle and switch-on wobble included).
+By default the curve runs across the whole edge and the picture is drawn 6%
+smaller, so the rim never sits on a window's own edges.
+
+Everything it reads and writes is one folder, `~/.local/state/cuda-crt`:
+`root` (this checkout), `target` (`0x...` address, `class:...`, `title:...`, or
+absent for the whole monitor), `look` (`tube` or `phosphor`), `set` (dial
+overrides read every frame), `ttl` (stand down after N seconds), `off`. It
+writes `pass.log`, `perf.csv` (a row every 5 s), and `pointer.why` (why the
+pointer was or was not mapped).
 
 ```bash
-hypr/prove /tmp/cuda-seat out/hypr
+hypr/build ~/.local/state/cuda-crt/cuda-pass.so && hyprctl plugin load ~/.local/state/cuda-crt/cuda-pass.so
+```
+
+The proofs run in omarchy-crt's sealed seat, a sandboxed headless Hyprland that
+cannot reach a live desktop (point `OMARCHY_CRT` at a checkout):
+
+```bash
+hypr/prove /tmp/cuda-seat out/hypr          # 17 checks: textures, picture, cost, idle, a failure mid-frame, unload, one window on two monitors
+```
+```bash
+hypr/prove-aim /tmp/cuda-seat out/hypr      # real clicks on 13 targets, found in the picture; ONLY=F fullscreen, ONLY=G with the bar bending
+```
+```bash
+hypr/prove-browser /tmp/cuda-seat out/hypr  # a real Chromium watched for a frozen picture and lost clicks; CYCLES=n reloads first
 ```
 
 Any video in, CRT video out:
@@ -137,6 +163,7 @@ graphics. The `glsl` path is the one that runs anywhere.
 ```
 phosphor_params.h      the parameter structs every path shares
 phosphor_half.h        half-precision conversion, shared by kernels and CPU reference
+tube_map.h             the curve and the transient motion: the ONLY definition, used by picture and pointer
 kernels/phosphor.cu    the STATE: phosphor update kernels, held bit-exact to the CPU
 kernels/glass.cu       drawn FROM the state: glass, halation, vector mode (fast math)
 shaders/               the matched GLSL: update.frag, optics.frag, probe.frag
@@ -149,7 +176,7 @@ src/cuda_path.hpp      the CUDA side of a frame (no OpenGL header, so a plugin c
 src/pipelines.hpp      every path behind one shape
 src/probe.cpp  src/stage1_test.cpp  src/stage2_bench.cpp  src/crt_render.cpp
 tools/                 fixtures, demo, live tube, slider panel (knobs.py), benchmark runner, mutation check
-hypr/                  the tracer plugin that runs the kernels inside Hyprland, and its proof
+hypr/                  the Hyprland plugin, its build, and its three proofs
 docs/research-notes.md what outside sources say, and what was done with it
 reviews/               an independent review of the first pass, and that reviewer's later build note and Hyprland plan
 audit.md  decision.md  results.csv

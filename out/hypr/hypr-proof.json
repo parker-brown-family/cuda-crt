@@ -14,22 +14,22 @@
   {
    "pass": true,
    "check": "whole pass, wall clock with the GPU finished either side (copy in, map, kernels, unmap, copy back)",
-   "measured": "mean 0.86 ms, worst 3.19 ms over 239 frames at 1920x1080"
+   "measured": "mean 1.15 ms, worst 9.11 ms over 239 frames at 1920x1080"
   },
   {
    "pass": true,
    "check": "an empty desk: the pass stops being asked for frames",
-   "measured": "762 frames, then 762 two seconds later"
+   "measured": "736 frames, then 736 two seconds later"
   },
   {
    "pass": true,
    "check": "a window appearing wakes the pass",
-   "measured": "762 frames while idle, 825 a second after a window opened"
+   "measured": "736 frames while idle, 810 a second after a window opened"
   },
   {
    "pass": true,
    "check": "a still window on screen: the pass goes quiet again",
-   "measured": "869 frames, then 869 two seconds later"
+   "measured": "844 frames, then 844 two seconds later"
   },
   {
    "pass": true,
@@ -59,7 +59,7 @@
   {
    "pass": true,
    "check": "inside the window the picture did change (the check above is not vacuous)",
-   "measured": "3784740 of 3809700 inside pixels differ (99.3%)"
+   "measured": "1168842 of 3809700 inside pixels differ (30.7%)"
   },
   {
    "pass": true,
@@ -69,7 +69,7 @@
   {
    "pass": true,
    "check": "with the window still, the pass goes quiet",
-   "measured": "665 frames, then 665 two seconds later"
+   "measured": "641 frames, then 641 two seconds later"
   },
   {
    "pass": true,

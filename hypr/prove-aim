@@ -131,6 +131,31 @@ def moved(rows, flat):
 
 
 ONLY_F = os.environ.get("ONLY") == "F"
+if os.environ.get("ONLY") == "G":
+    # G: the full-edge curve and safe edge with everything that moves the picture ON and
+    # strong (tracking bar bending and tearing, jiggle, the switch-on wobble), the clock
+    # frozen so the bar holds still over the middle of the window between capture and click.
+    # The pointer must follow the bar too: every spot hit where it is drawn.
+    try:
+        put("keep-drawing")
+        put("set", "aberr=0,halation=0,glow=0,beam=0,flicker=0,core=0,inset=0.06,tracking=1,track_sweep=5,track_rest=2,band_h=700,track_bend=30,track_noise=0.9,track_chroma=0,jiggle=0.8")
+        put("freeze", "2.25"); time.sleep(1.0)
+        print("G. the bar over the middle, bending (30 px) and tearing, jiggle on, clock frozen, mapped")
+        G = run("G")
+        put("input-flat"); print("G-control. the same picture, mapping off"); GC = run("Gc"); drop("input-flat")
+        hits = lambda rows: sum(r["hit"] for r in rows)
+        mid = [r for r in G if r["spot"] in (6, 7, 8)]
+        errs = [r["click_error_px"] for r in G if r["click_error_px"] is not None]
+        verdict(len(G) == 13 and hits(G) == 13, "G. with the bar bending and tearing across the middle, mapped: every spot hit where it is drawn",
+                "%d of %d hit; clicks landed %.1f px from the target's centre on average, %.1f at worst; the middle row (in the bar) %s" % (hits(G), len(G), sum(errs) / max(1, len(errs)), max(errs or [0]), [r["click_error_px"] for r in mid]))
+        cmid = [r for r in GC if r["spot"] in (6, 7, 8)]
+        verdict(True, "G-control (information): the same clicks unmapped", "%d of %d hit; middle row %s" % (hits(GC), len(GC), [(r["hit"], r["click_error_px"]) for r in cmid]))
+        json.dump({"failed": fails, "checks": results, "G": G, "G_control": GC, "log": log().splitlines()}, open(OUT + "/aim-proof-motion.json", "w"), indent=1)
+    finally:
+        seat("hyprctl", "plugin", "unload", HOME + "/cuda-pass.so")
+        down()
+    print("all checks passed" if not fails else "%d FAILED" % fails)
+    sys.exit(1 if fails else 0)
 try:
     put("keep-drawing")   # every capture is a fresh frame
     if ONLY_F:

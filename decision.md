@@ -113,11 +113,30 @@ checks, all passing (`out/hypr/hypr-proof.json`):
   the frame with the pass off.
 - The plugin unloads and the compositor keeps answering.
 
-What this does not show: per-window surfaces (the tracer treats the monitor as
-one tile), damage limited to a window's box (it damages the whole monitor while
-anything is moving), input-to-display latency, a real GPU fault, or anything on
-a live session. The plan for those, written by the reviewing agent, is
-`reviews/PLAN-2026-11-15-hyprland-proof.md`.
+Since then (2026-11-16) the pass targets one window, has run on Parker's live
+desktop, and maps clicks:
+
+- **Clicks land on what is drawn.** `hypr/prove-aim` finds each of 13 targets in
+  the captured picture, clicks there with a virtual mouse, and the page reports
+  hit or miss and where the click arrived. With the curve across the whole edge
+  and the picture drawn 6% smaller: 13 of 13, corners drawn about 98 px from
+  their true place; fullscreen with a dock layer: 13 of 13 within 2.2 px; with
+  the tracking bar bending 30 px and tearing across the middle: 13 of 13 within
+  3.6 px. The same picture unmapped misses (0 of 13 with the bar).
+- **Two live failures found and fixed.** Fullscreen windows were unmapped (a
+  floating-point "cut off" test, and the dock layer counted though Hyprland
+  ignores it over fullscreen). `pointer.why` now records every decision.
+- **The compositor never waits on the GPU.** The still-fading answer and the
+  kernel time are read one frame late. Same browser, same look, 45 s: compositor
+  time per frame 1.11 ms to 0.23 ms median, worst frame 52.7 ms to 3.5 ms.
+- **Unloading gives everything back.** Before, every unload left textures,
+  surfaces, modules and a CUDA context reference inside the compositor.
+- **Unexplained:** one live Chromium window locked about forty seconds after the
+  third load; it could not be reproduced in the seat (real Chromium, reload
+  cycles, 59 checks). The 52 ms compositor stalls removed above are the best
+  lead, not a proven cause.
+- **Not proven:** drags across a window's edge, a toast over the window, a
+  rotated monitor (mapping is off there by design), input-to-display latency.
 
 ## The evidence (first pass)
 

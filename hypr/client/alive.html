@@ -1,0 +1,12 @@
+<!doctype html><meta charset="utf-8"><title>alive</title>
+<style>html,body{margin:0;height:100%;font:700 160px/1 monospace;color:#e8ffe8;transition:none}
+body{display:flex;align-items:center;justify-content:center;background:#123}
+#n{background:#000;padding:20px 40px}</style>
+<body><div id="n">0</div>
+<script>
+// A frame counter that changes every animation frame (a frozen picture stops it),
+// and a background that flips colour on every click (lost input leaves it alone).
+let n = 0, flip = false;
+(function tick() { document.getElementById('n').textContent = (n++).toString().padStart(6, '0'); requestAnimationFrame(tick); })();
+addEventListener('mousedown', () => { flip = !flip; document.body.style.background = flip ? '#612' : '#123'; });
+</script></body>

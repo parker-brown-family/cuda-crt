@@ -51,6 +51,7 @@
 #include <hyprland/src/desktop/state/WindowState.hpp>
 #include <hyprland/src/event/EventBus.hpp>
 #include <hyprland/src/render/Renderer.hpp>
+#include <hyprland/src/render/OpenGL.hpp>
 #include <hyprland/src/render/pass/PassElement.hpp>
 #include <hyprland/src/output/Monitor.hpp>
 #include <hyprland/src/helpers/math/Math.hpp>
@@ -408,8 +409,32 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
     return {"cuda-pass", "The CUDA CRT inside Hyprland, on one window or one monitor: a proof, loaded by hand", "Parker Brown", "0.0.2"};
 }
 
+// Give back everything this plugin holds on the GPU. Hyprland keeps an unloaded
+// plugin's code mapped, and a later load of a new build starts with fresh statics:
+// without this, every unload leaked two registered textures, a phosphor surface,
+// two compiled modules and a reference to CUDA's context, all still live inside
+// the compositor. Needs the compositor's GL context current; nothing here throws.
+static void teardown() {
+    if (!g.cudaUp) return;
+    Render::GL::g_pHyprOpenGL->makeEGLCurrent();
+    cuCtxSetCurrent(g.cu.ctx);
+    cuCtxSynchronize();
+    g.path.abandon();          // unmaps anything still mapped
+    release();                 // unregisters and deletes the textures, frees the surface
+    if (g.ev0) cuEventDestroy(g.ev0);
+    if (g.ev1) cuEventDestroy(g.ev1);
+    if (g.path.d_active) cuMemFree(g.path.d_active);
+    for (CUmodule m : g.cu.mods) cuModuleUnload(m);
+    g.cu.mods.clear();
+    cuCtxSetCurrent(nullptr);
+    cuDevicePrimaryCtxRelease(g.cu.dev);
+    g.cudaUp = false;
+    note("unloaded: textures unregistered, surface freed, modules unloaded, CUDA context released");
+}
+
 APICALL EXPORT void PLUGIN_EXIT() {
     g_stage.reset();
+    teardown();
     // Hyprland keeps a frame's pass elements until the next frame begins, and would
     // then destroy ours with code that has been unloaded.
     g_pHyprRenderer->m_renderPass.clear();

@@ -1,12 +1,13 @@
 #!/usr/bin/env bash
 # Build the tracer plugin against the installed Hyprland headers.  hypr/build <out.so>
+# CUDA_PASS_SOURCE=<file.cpp> builds another version of the source (it must sit in hypr/).
 set -euo pipefail
 here="$(cd "$(dirname "$0")/.." && pwd)"
 tc="$here/.toolchain/nvidia"
 out="${1:?usage: hypr/build <out.so>}"
 mkdir -p "$(dirname "$out")"
 # shellcheck disable=SC2046  # pkg-config prints several flags
-g++ -shared -fPIC -std=c++2b -O2 -Wno-c++11-narrowing -Wno-deprecated-declarations "$here/hypr/cuda-pass.cpp" -o "$out" \
+g++ -shared -fPIC -std=c++2b -O2 -Wno-c++11-narrowing -Wno-deprecated-declarations "${CUDA_PASS_SOURCE:-$here/hypr/cuda-pass.cpp}" -o "$out" \
   -I"$here" -I"$here/src" -I"$tc/cuda_runtime/include" -I"$tc/cuda_nvrtc/include" \
   $(pkg-config --cflags hyprland pixman-1 libdrm pangocairo libinput libudev wayland-server xkbcommon) \
   -lGLESv2 -ldl -lcuda -L"$tc/cuda_nvrtc/lib" -l:libnvrtc.so.12 -Wl,-rpath,"$tc/cuda_nvrtc/lib"

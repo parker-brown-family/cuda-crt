@@ -4,6 +4,7 @@
 // matched shader. The state itself is kernels/phosphor.cu.
 #include "phosphor_params.h"
 #include "phosphor_half.h"
+#include "tube_map.h"
 
 __device__ inline float linear_to_srgb(float c) {
     c = fminf(fmaxf(c, 0.0f), 1.0f);
@@ -82,12 +83,11 @@ __device__ inline float sstep(float e0, float e1, float v) {
     float t = clamp01((v - e0) / (e1 - e0));
     return t * t * (3.0f - 2.0f * t);
 }
-// the tube's barrel: a gather, tile-local 0..1 in, tile-local out
-__device__ inline v2 tube_warp(v2 l, float k1, float k2) {
-    float cx = l.x - 0.5f, cy = l.y - 0.5f;
-    float r2 = cx * cx + cy * cy;
-    float f = 1.0f + k1 * r2 + k2 * r2 * r2;
-    return V(0.5f + cx * f, 0.5f + cy * f);
+// the tube's curve: tube_map.h is the only place it is written down
+__device__ inline v2 tube_warp(v2 l, TubeMap m) {
+    v2 r;
+    tube_gather(m, l.x, l.y, &r.x, &r.y);
+    return r;
 }
 
 // state_tex: the tile's phosphor state, bilinear, clamped, texel coordinates
@@ -101,8 +101,14 @@ extern "C" __global__ void crt_optics_tex(cudaTextureObject_t state_tex, cudaSur
     if (x >= w || y >= h) return;
     float fw = (float)w, fh = (float)h;
     v2 l0 = V((x + 0.5f) / fw, (y + 0.5f) / fh);
-    float k1 = o.k1 * o.curv, k2 = o.k2 * o.curv;
-    v2 l2 = tube_warp(l0, k1, k2);
+    TubeMap tm;
+    tm.k1 = o.k1 * o.curv; tm.k2 = o.k2 * o.curv; tm.core = o.core; tm.inset = o.inset;
+    v2 l2 = tube_warp(l0, tm);
+    // With an inset the window is drawn smaller and the glass's edge sits on padding
+    // around it. `g2` is the position on the GLASS (0..1 = its edge); l2 stays the
+    // position in the WINDOW. With no inset the two are the same thing.
+    float pad = o.inset * 0.5f;
+    v2 g2 = V((l2.x + pad) / (1.0f + 2.0f * pad), (l2.y + pad) / (1.0f + 2.0f * pad));
 
     // the glass sits in a rim: a rounded rectangle in SOURCE space, so the warp
     // carries its corners round with the picture (terminal-delight's td-glass-rim)
@@ -110,10 +116,10 @@ extern "C" __global__ void crt_optics_tex(cudaTextureObject_t state_tex, cudaSur
     if (o.curv > 0.0f) {
         float short_side = fminf(fw, fh);
         float corner = fminf(fmaxf(short_side * 0.055f, 10.0f), 72.0f);
-        float qx = fabsf(l2.x * fw - fw * 0.5f) - fw * 0.5f + corner;
-        float qy = fabsf(l2.y * fh - fh * 0.5f) - fh * 0.5f + corner;
+        float qx = fabsf(g2.x * fw - fw * 0.5f) - fw * 0.5f + corner;
+        float qy = fabsf(g2.y * fh - fh * 0.5f) - fh * 0.5f + corner;
         float lip_w = fminf(fmaxf(short_side * 0.045f, 8.0f), 48.0f);
-        float edge_x = fminf(l2.x, 1.0f - l2.x) * fw, edge_y = fminf(l2.y, 1.0f - l2.y) * fh;
+        float edge_x = fminf(g2.x, 1.0f - g2.x) * fw, edge_y = fminf(g2.y, 1.0f - g2.y) * fh;
         // Deep inside the glass (most of the picture) the rim contributes exactly
         // nothing: no lip shadow, no corner shade, no edge. Skip its arithmetic there.
         if (fmaxf(qx, qy) < -(lip_w + corner) && (edge_x >= lip_w * 3.0f || edge_y >= lip_w * 3.0f)) goto rim_done;
@@ -122,10 +128,10 @@ extern "C" __global__ void crt_optics_tex(cudaTextureObject_t state_tex, cudaSur
         const float aa = 1.5f;
         inb = 1.0f - sstep(-aa, aa, sd);
         float rim = 1.0f - sstep(0.0f, lip_w, fmaxf(-sd, 0.0f));
-        float ly = clamp01(l2.y);
+        float ly = clamp01(g2.y);
         float from_top = mixf(1.10f, 0.85f, ly);
-        float ax = fminf(l2.x, 1.0f - l2.x) * fw;
-        float ay = fminf(l2.y, 1.0f - l2.y) * fh;
+        float ax = fminf(g2.x, 1.0f - g2.x) * fw;
+        float ay = fminf(g2.y, 1.0f - g2.y) * fh;
         float cornerness = (1.0f - sstep(0.0f, lip_w * 3.0f, ax)) * (1.0f - sstep(0.0f, lip_w * 3.0f, ay));
         shade = 1.0f - fminf(fmaxf(0.85f * rim * sqrtf(rim) * from_top + 0.30f * cornerness, 0.0f), 0.94f);
         float lip_d = (sd - aa * 1.5f) / fmaxf(aa * 1.2f, 1.0f);
@@ -158,17 +164,19 @@ rim_done:;
         moved = true;
     }
     if (o.jiggle_px != 0.0f) { l0.y += o.jiggle_px / fh; moved = true; }
-    v2 lp = moved ? tube_warp(l0, k1, k2) : l2;
+    v2 lp = moved ? tube_warp(l0, tm) : l2;
+    // outside the window (the padding an inset leaves, or past the bend) there is no picture
+    float in_window = (o.inset > 0.0f && (lp.x < 0.0f || lp.x > 1.0f || lp.y < 0.0f || lp.y > 1.0f)) ? 0.0f : 1.0f;
     float sx = clamp01(lp.x) * fw, sy = clamp01(lp.y) * fh;
 
     // chromatic aberration: R and B through slightly different warps near the rim
     float a = o.aberr * 0.004f * r2 + dg * 0.010f * sinf(o.degauss_phase * 0.7f) + o.track_chroma * bar * 0.0035f;
-    v2 lr = tube_warp(V(l0.x + a, l0.y), k1, k2);
-    v2 lb = tube_warp(V(l0.x - a, l0.y), k1, k2);
+    v2 lr = tube_warp(V(l0.x + a, l0.y), tm);
+    v2 lb = tube_warp(V(l0.x - a, l0.y), tm);
     float4 cc = tex2D<float4>(state_tex, sx, sy);
     float cr = tex2D<float4>(state_tex, clamp01(lr.x) * fw, clamp01(lr.y) * fh).x;
     float cb = tex2D<float4>(state_tex, clamp01(lb.x) * fw, clamp01(lb.y) * fh).z;
-    float lin[3] = {cr, cc.y, cb};
+    float lin[3] = {cr * in_window, cc.y * in_window, cb * in_window};
 
     // 4-tap glow, in linear light: persistence trails bleed the way lit phosphor does
     if (o.glow > 0.001f) {

@@ -75,6 +75,8 @@ int main(int argc, char **argv) {
         {"halation", &look.halation, "Halation glow", "Phosphor", 0, 1, 0.01f, "", "Soft glow around lit text"},
         {"beam", &look.beam, "Beam swell", "Phosphor", 0, 2, 0.02f, "", "Bright strokes spread wider than dim ones"},
         {"curv", &look.curv, "Barrel warp", "Tube", 0, 3, 0.02f, "", "How far the glass bows"},
+        {"core", &look.core, "Flat middle", "Tube", 0, 0.95f, 0.01f, "", "Keep the middle flat and bend only toward the rim, so things stay where they are"},
+        {"inset", &look.inset, "Safe edge", "Tube", 0, 0.12f, 0.005f, "", "Draw the picture a little smaller so the rim never covers the window's edges"},
         {"scan", &look.scan, "Scanline depth", "Tube", 0, 0.6f, 0.01f, "", "How dark the lines between rows are"},
         {"scan_step", &look.scan_step, "Scanline pitch", "Tube", 2, 8, 1, "px", "Pixels between scanlines"},
         {"mask", &look.mask, "Aperture grille", "Tube", 0, 0.6f, 0.01f, "", "Vertical red, green and blue stripes"},

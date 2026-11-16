@@ -77,7 +77,7 @@ struct Cuda {
         // Compiled kernels are kept beside the lab (out/ptx/), named by a hash of every
         // input that could change them, so a later start loads in milliseconds. A
         // compositor plugin relies on this: it must never stall a frame on a compile.
-        std::string key = src + "\n" + slurp_or_empty(incdir + "/phosphor_params.h") + slurp_or_empty(incdir + "/phosphor_half.h") + arch + mode + nvrtc_version;
+        std::string key = src + "\n" + slurp_or_empty(incdir + "/phosphor_params.h") + slurp_or_empty(incdir + "/phosphor_half.h") + slurp_or_empty(incdir + "/tube_map.h") + arch + mode + nvrtc_version;
         unsigned long long h = 1469598103934665603ull;
         for (unsigned char c : key) { h ^= c; h *= 1099511628211ull; }
         char name[64];

@@ -2,6 +2,7 @@
 // clock drives. No OpenGL and no CUDA in here, so a compositor plugin can use it.
 #pragma once
 #include "phosphor_params.h"
+#include "tube_map.h"
 #include "cpu_ref.hpp"
 #include <algorithm>
 #include <cmath>
@@ -19,7 +20,17 @@ struct Look {
     float degauss_at = -1.0f;  // seconds into the run at which the tube is "switched on"; < 0 = never
     // the tracking bar as a disturbance, and the screen's own unsteadiness
     float track_bend = 6.0f, track_noise = 0.35f, track_chroma = 1.0f, jiggle = 0.15f;
+    // the shape of the curve (tube_map.h): 0, 0 is the classic barrel
+    float core = 0.0f, inset = 0.0f;
 };
+
+// The curve as the picture and the pointer must both see it. Anything that maps a
+// pointer through the glass builds its TubeMap here, from the same Look the kernel got.
+inline TubeMap make_tube(const Look &k) {
+    TubeMap m;
+    m.k1 = k.k1 * k.curv; m.k2 = k.k2 * k.curv; m.core = k.core; m.inset = k.inset;
+    return m;
+}
 
 inline float hash1(float n) { float v = sinf(n * 127.1f) * 43758.5453f; return v - floorf(v); }
 
@@ -88,6 +99,8 @@ inline OpticsParams make_optics(const Look &k, float t, int tile_h, bool extras 
     o.track_chroma = extras ? k.track_chroma : 0.0f;
     o.jiggle_px = extras ? jiggle_px(k, t) : 0.0f;
     o.seed = fmodf(t * 60.0f, 4096.0f);
+    o.core = extras ? k.core : 0.0f;
+    o.inset = extras ? k.inset : 0.0f;
     o.curv = k.curv; o.k1 = k.k1; o.k2 = k.k2; o.aberr = k.aberr; o.scan = k.scan; o.scan_step = k.scan_step;
     o.glow = k.glow; o.glow_px = k.glow_px; o.bloom = k.bloom; o.vign = k.vign; o.specular = k.specular;
     o.glare = k.glare; o.tracking = k.tracking; o.band_h = k.band_h;

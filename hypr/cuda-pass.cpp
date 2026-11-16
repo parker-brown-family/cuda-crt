@@ -209,7 +209,7 @@ static void dress(bool phosphorOnly) {
         {"vign", &Look::vign}, {"specular", &Look::specular}, {"glare", &Look::glare}, {"aberr", &Look::aberr}, {"mask", &Look::mask},
         {"tracking", &Look::tracking}, {"track_rest", &Look::track_rest}, {"track_sweep", &Look::track_sweep}, {"band_h", &Look::band_h},
         {"track_bend", &Look::track_bend}, {"track_noise", &Look::track_noise}, {"track_chroma", &Look::track_chroma},
-        {"jiggle", &Look::jiggle}, {"flicker", &Look::flicker}, {"halation", &Look::halation}, {"glow_knee", &Look::glow_knee}, {"beam", &Look::beam}};
+        {"jiggle", &Look::jiggle}, {"flicker", &Look::flicker}, {"halation", &Look::halation}, {"glow_knee", &Look::glow_knee}, {"beam", &Look::beam}, {"core", &Look::core}, {"inset", &Look::inset}};
     size_t pos = 0;
     while (pos < all.size()) {
         size_t end = all.find_first_of(",\n", pos);

@@ -64,6 +64,9 @@ typedef struct OpticsParams {
     float track_chroma;  /* extra colour split inside the bar                */
     float jiggle_px;     /* this frame's vertical hop of the picture, in px  */
     float seed;          /* changes every frame; drives the static           */
+    /* the shape of the curve: see tube_map.h */
+    float core;          /* 0 = classic barrel; higher keeps the middle flat */
+    float inset;         /* draw the picture smaller so the rim sits on padding */
 } OpticsParams;
 
 #endif

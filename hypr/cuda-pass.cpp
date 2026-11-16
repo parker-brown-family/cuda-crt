@@ -50,6 +50,7 @@
 #include <hyprland/src/desktop/view/Window.hpp>
 #include <hyprland/src/desktop/Workspace.hpp>
 #include <hyprland/src/desktop/state/WindowState.hpp>
+#include <hyprland/src/managers/fullscreen/FullscreenController.hpp>
 #include <hyprland/src/event/EventBus.hpp>
 #include <hyprland/src/render/Renderer.hpp>
 #include <hyprland/src/render/OpenGL.hpp>
@@ -112,6 +113,8 @@ struct SEngine {
     CBox     box;
     void*    boxMon  = nullptr;
     bool     boxLive = false;    // false: nothing drawn yet, or the box was clipped by its monitor
+    bool     boxFullscreen = false;   // the target covers its monitor: Hyprland then ignores TOP layers for input
+    std::string why;             // the pointer's last decision, written to pointer.why when it changes
     bool     hooksOk = false;    // false: the pointer cannot be mapped, so nothing may be bent
 };
 static SEngine g;
@@ -187,6 +190,7 @@ static bool where(PHLMONITOR m, int fbw, int fbh, SRect& r, void*& owner) {
     if (spec.empty()) {
         r = {0, 0, fbw, fbh}; owner = m.get();
         g.box = m->logicalBox(); g.boxMon = m.get(); g.boxLive = m->m_transform == WL_OUTPUT_TRANSFORM_NORMAL;
+        g.boxFullscreen = false;
         return true;
     }
     for (auto const& w : Desktop::windowState()->windows()) {
@@ -206,8 +210,12 @@ static bool where(PHLMONITOR m, int fbw, int fbh, SRect& r, void*& owner) {
         owner = w.get();
         // a box cut off by its monitor's edge is drawn as a smaller tile than the window:
         // the pointer would be mapped through the wrong box, so it is not mapped at all
-        const bool whole = x0 == (int)std::floor(fb.x) && y0 == (int)std::floor(fb.y) && x1 == (int)std::ceil(fb.x + fb.w) && y1 == (int)std::ceil(fb.y + fb.h);
+        // Half a pixel of slack: a fullscreen window's box comes out a hair larger than its
+        // monitor (1600 x 1.6 is not exactly 2560 in floating point), and an exact test
+        // called it "cut off" and switched the pointer mapping off for every fullscreen window.
+        const bool whole = fb.x >= -0.5 && fb.y >= -0.5 && fb.x + fb.w <= fbw + 0.5 && fb.y + fb.h <= fbh + 0.5;
         g.box = logical; g.boxMon = m.get(); g.boxLive = whole && m->m_transform == WL_OUTPUT_TRANSFORM_NORMAL;
+        g.boxFullscreen = Fullscreen::controller()->isFullscreen(w, Fullscreen::FSMODE_FULLSCREEN);
         return true;
     }
     return false;
@@ -451,28 +459,61 @@ static Vector2D through(const CBox& box, const Vector2D& p, bool clamp) {
     return p + box.pos() + Vector2D{w.x * box.w, w.y * box.h} - in;
 }
 
+// Why the pointer was or was not mapped, written to pointer.why only when the answer
+// changes (a moving mouse asks hundreds of times a second). The record that tells a
+// person "it is mapped" from "a layer was in the way" without a debugger.
+static void why(const char* reason) {
+    if (g.why == reason) return;
+    g.why = reason;
+    std::ofstream(dir() + "/pointer.why") << reason << "\n";
+}
+
 static std::optional<Vector2D> mapped(const Vector2D& p) {
     // Checked at the moment of the move, never cached: the instant the pass stands
     // down (off, its time, a failure) nothing is mapped any more.
-    const bool on = g.state == SEngine::READY && g.boxLive && g.look.curv > 0 && !flag("off") && !flag("input-flat");
-    if (!on || g_pSessionLockManager->isSessionLocked() || g_pInputManager->isConstrained()) {
+    const char* off = g.state != SEngine::READY ? "off: the pass is not running"
+                      : !g.boxLive                ? "off: the target is not drawn here (other workspace, cut off, or rotated monitor)"
+                      : g.look.curv <= 0          ? "off: the glass is flat"
+                      : flag("off")               ? "off: switched off"
+                      : flag("input-flat")        ? "off: input-flat"
+                      : g_pSessionLockManager->isSessionLocked() ? "off: session locked"
+                      : g_pInputManager->isConstrained()         ? "off: pointer constrained by an app"
+                                                                 : nullptr;
+    if (off) {
+        why(off);
         g_pressBox.reset();
         return std::nullopt;
     }
-    if (!g_pInputManager->m_currentlyHeldButtons.empty() && !PROTO::data->dndActive())
+    if (!g_pInputManager->m_currentlyHeldButtons.empty() && !PROTO::data->dndActive()) {
+        why(g_pressBox ? "mapped: a held press, through the box it landed in" : "off: a press that began outside the target");
         return g_pressBox ? std::optional{through(*g_pressBox, p, false)} : std::nullopt;
+    }
     g_pressBox.reset();
     for (auto const& m : State::monitorState()->monitors()) {
         if (m.get() != g.boxMon || !m->logicalBox().containsPoint(p)) continue;
         Vector2D coords;
         PHLLS    layer;
-        for (auto const lvl : {ZWLR_LAYER_SHELL_V1_LAYER_OVERLAY, ZWLR_LAYER_SHELL_V1_LAYER_TOP})
-            if (Desktop::viewState()->hitTest().layerSurfaceAt(p, &m->m_layerSurfaceLayers[lvl], &coords, &layer))
-                return std::nullopt;   // a flat layer on top is hit where it is drawn
-        if (!g.box.containsPoint(p)) return std::nullopt;
+        // Hyprland's own rule: over a FULLSCREEN window only OVERLAY layers take the
+        // pointer (the bar and the dock are behind it). Anything else: OVERLAY, then TOP.
+        // Asking about TOP over a fullscreen window found Omarchy's dock along the bottom
+        // and switched the mapping off exactly where a video's controls are.
+        if (Desktop::viewState()->hitTest().layerSurfaceAt(p, &m->m_layerSurfaceLayers[ZWLR_LAYER_SHELL_V1_LAYER_OVERLAY], &coords, &layer)) {
+            why("off: an overlay layer is under the pointer (it is hit where it is drawn)");
+            return std::nullopt;
+        }
+        if (!g.boxFullscreen && Desktop::viewState()->hitTest().layerSurfaceAt(p, &m->m_layerSurfaceLayers[ZWLR_LAYER_SHELL_V1_LAYER_TOP], &coords, &layer)) {
+            why("off: a top layer (bar, dock) is under the pointer (it is hit where it is drawn)");
+            return std::nullopt;
+        }
+        if (!g.box.containsPoint(p)) {
+            why("off: the pointer is outside the target");
+            return std::nullopt;
+        }
+        why(g.boxFullscreen ? "mapped (fullscreen window)" : "mapped");
         g_pressBox = g.box;
         return through(g.box, p, true);
     }
+    why("off: the pointer is on another monitor");
     return std::nullopt;
 }
 

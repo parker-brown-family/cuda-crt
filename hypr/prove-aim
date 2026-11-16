@@ -45,7 +45,11 @@ W0 = win()
 SKIP = "move %d %d" % (W0["at"][0] + W0["size"][0] * 0.62, W0["at"][1] + W0["size"][1] * 0.38)
 print("  window:", W0["at"], W0["size"])
 put("target", "title:aim "); put("look", "tube"); put("ttl", "900")
-BASE = "tracking=0,jiggle=0,flicker=0,halation=0.08,glow=0.15,beam=0.2,glow_knee=0.2"
+# Effects that change colour but not where things are (the colour split at the rim, the
+# glows) are off, so a target's centre can be measured cleanly. The curve and the safe
+# edge, which are geometry, are exactly as on the desktop. The tracking bar and jiggle
+# move the picture for a moment and are not mapped.
+BASE = "tracking=0,jiggle=0,flicker=0,aberr=0,halation=0,glow=0,beam=0"
 put("set", BASE + ",core=0,inset=0")
 print("  plugin load:", seat("hyprctl", "plugin", "load", HOME + "/cuda-pass.so").stdout.strip().splitlines()[-1:])
 send = lambda line: open(FIFO, "w").write(line + "\n")
@@ -59,7 +63,7 @@ def title():
     if not w:
         return None
     p = w["title"].split()
-    return {"count": int(p[1]), "spot": int(p[2]), "x": int(p[3]), "y": int(p[4]), "last": p[5], "at": w["at"]}
+    return {"count": int(p[1]), "spot": int(p[2]), "x": int(p[3]), "y": int(p[4]), "last": p[5], "cx": int(p[6]), "cy": int(p[7]), "at": w["at"]}
 
 
 def find_target(fr, count):
@@ -71,8 +75,10 @@ def find_target(fr, count):
         row = px[y * w * 4:(y + 1) * w * 4]
         for x in range(0, w, 2):
             r, g, b = row[x * 4], row[x * 4 + 1], row[x * 4 + 2]
-            magenta = r > 140 and b > 110 and g < 120 and r - g > 80 and b - g > 50
-            cyan = g > 140 and b > 140 and r < 120 and g - r > 70 and b - r > 70
+            # by ratio, not brightness: the rim's shadow and the scanlines darken a target
+            # evenly, and an absolute threshold dropped its darker half and shifted its centre
+            magenta = r > 45 and b > 38 and r > 2.2 * g and b > 1.8 * g
+            cyan = g > 45 and b > 45 and g > 2.2 * r and b > 2.2 * r
             if (cyan if count % 2 else magenta):
                 sx += x; sy += y; n += 1
     return (sx / n, sy / n, n) if n >= 6 else None
@@ -108,9 +114,10 @@ def run(label, n_spots=13):
             t2 = title()
             if t2 and t2["count"] > t0["count"]: break
         hit = bool(t2 and t2["count"] > t0["count"] and t2["last"] == "hit")
+        err = round(math.hypot(t2["cx"] - t0["x"], t2["cy"] - t0["y"]), 1) if t2 and t2["count"] > t0["count"] else None
         seen.add(t0["spot"])
-        rows.append({"spot": t0["spot"], "drawn": [round(dx, 1), round(dy, 1)], "page_xy": [t0["x"], t0["y"]], "hit": hit, "visible": True})
-        print("    %s spot %2d  page %4d,%4d  drawn at %4.0f,%4.0f (%d px of colour)  %s" % (label, t0["spot"], t0["x"], t0["y"], dx, dy, c[2], "HIT" if hit else "miss"), flush=True)
+        rows.append({"spot": t0["spot"], "drawn": [round(dx, 1), round(dy, 1)], "page_xy": [t0["x"], t0["y"]], "hit": hit, "visible": True, "click_error_px": err})
+        print("    %s spot %2d  page %4d,%4d  drawn at %4.0f,%4.0f (%d px of colour)  %s, the click landed %s px from the target's centre" % (label, t0["spot"], t0["x"], t0["y"], dx, dy, c[2], "HIT" if hit else "miss", err), flush=True)
         send("move 5 5"); time.sleep(0.25)
     return rows
 
@@ -123,23 +130,49 @@ def moved(rows, flat):
     return {r["spot"]: round(math.hypot(r["drawn"][0] - ref[r["spot"]][0], r["drawn"][1] - ref[r["spot"]][1]), 1) for r in rows if r["spot"] in ref and r["drawn"] and ref[r["spot"]]}
 
 
+ONLY_F = os.environ.get("ONLY") == "F"
 try:
     put("keep-drawing")   # every capture is a fresh frame
-    print("D. the pass off: where every spot is drawn when nothing is bent")
-    put("off"); time.sleep(0.8); D = run("D"); drop("off"); time.sleep(1.0)
-    print("A. the classic curve, pointer mapped")
-    put("set", BASE + ",core=0,inset=0"); time.sleep(0.6); A = run("A")
-    print("E. the curve across the whole edge, picture drawn smaller so the rim sits outside the window, mapped")
-    put("set", BASE + ",core=0,inset=0.06"); time.sleep(0.6); E = run("E")
-    print("B. the same picture as E, mapping off (the control)")
-    put("input-flat"); B = run("B"); drop("input-flat")
-    print("C. flat middle and safe edge, mapped")
-    put("set", BASE + ",core=0.6,inset=0.05"); time.sleep(0.6); C = run("C")
+    if ONLY_F:
+        D = A = E = B = C = []
+    if not ONLY_F:
+      print("D. the pass off: where every spot is drawn when nothing is bent")
+      put("off"); time.sleep(0.8); D = run("D"); drop("off"); time.sleep(1.0)
+    if not ONLY_F:
+      print("A. the classic curve, pointer mapped")
+      put("set", BASE + ",core=0,inset=0"); time.sleep(0.6); A = run("A")
+      print("E. the curve across the whole edge, picture drawn smaller so the rim sits outside the window, mapped")
+      put("set", BASE + ",core=0,inset=0.06"); time.sleep(0.6); E = run("E")
+      print("B. the same picture as E, mapping off (the control)")
+      put("input-flat"); B = run("B"); drop("input-flat")
+      print("C. flat middle and safe edge, mapped")
+      put("set", BASE + ",core=0.6,inset=0.05"); time.sleep(0.6); C = run("C")
+    print("F. as E, the window FULLSCREEN with a dock-like layer along the bottom (as on Omarchy)")
+    put("set", BASE + ",core=0,inset=0.06")
+    dock = subprocess.Popen([S + "/in", "env", "QT_QPA_PLATFORM=wayland", "QS_NO_RELOAD_POPUP=1", "quickshell", "-p", HOME + "/cuda-client/dock.qml"],
+                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+    clients.append(dock); time.sleep(2.0)
+    layers = seat("hyprctl", "layers", "-j").stdout
+    r = seat("hyprctl", "dispatch", 'hl.dsp.window.fullscreen({ mode = "fullscreen", action = "set", window = "address:%s" })' % win()["address"]); time.sleep(1.5)
+    print("    fullscreen dispatch:", (r.stdout + r.stderr).strip()[:80])
+    W1 = win(); print("    dock layer present: %s; window now %s %s, fullscreen %s" % ("test-dock" in layers, W1["at"], W1["size"], W1.get("fullscreen")))
+    SKIP_SAVED = SKIP
+    globals()["SKIP"] = "move %d %d" % (W1["at"][0] + W1["size"][0] * 0.62, W1["at"][1] + W1["size"][1] * 0.38)
+    F = run("F")
+    try:
+        print("    pointer.why after F:", open(FL + "/pointer.why").read().strip())
+    except OSError:
+        pass
     hits = lambda rows: sum(r["hit"] for r in rows)
     seen_ = lambda rows: [r for r in rows if r["visible"]]
-    mA, mE, mB, mC = moved(A, D), moved(E, D), moved(B, D), moved(C, D)
+    mA, mE, mB, mC = (moved(A, D), moved(E, D), moved(B, D), moved(C, D)) if not ONLY_F else ({}, {}, {}, {})
     corners = lambda mm: [mm.get(k) for k in sorted(CORNERS)]
     print()
+    if ONLY_F:
+        errs = [r["click_error_px"] for r in F if r["click_error_px"] is not None]
+        verdict(len(F) == 13 and hits(F) == 13 and W1.get("fullscreen") == 2 and "test-dock" in layers, "F. fullscreen with a dock layer along the bottom, mapped: every spot hit where it is drawn", "%d of %d hit; clicks landed %.1f px from the target's centre on average, %.1f at worst" % (hits(F), len(F), sum(errs) / max(1, len(errs)), max(errs or [0])))
+        json.dump({"failed": fails, "checks": results, "F": F, "log": log().splitlines()}, open(OUT + "/aim-proof-fullscreen.json", "w"), indent=1)
+        sys.exit(1 if fails else 0)
     verdict(len(D) == 13 and hits(D) == 13, "D. pass off: every spot is hit", "%d of %d hit" % (hits(D), len(D)))
     verdict(len(E) == 13 and all(r["visible"] for r in E) and min(v for v in corners(mE) if v is not None) > 20,
             "E. the picture really is bent and every spot is visible", "corner targets drawn %s px from their flat place" % corners(mE))
@@ -149,8 +182,9 @@ try:
     verdict(len(C) == 13 and hits(C) == 13, "C. flat middle and safe edge, mapped: every spot is hit", "%d of %d hit; corners drawn %s px from flat" % (hits(C), len(C), corners(mC)))
     vis = seen_(A)
     verdict(all(r["hit"] for r in vis), "A. classic curve, mapped: every spot that can be SEEN is hit", "%d of %d visible, all %d hit; not visible: spots %s" % (len(vis), len(A), hits(A), [r["spot"] for r in A if not r["visible"]]))
+    verdict(len(F) == 13 and hits(F) == 13 and W1.get("fullscreen") == 2 and "test-dock" in layers, "F. fullscreen with a dock layer along the bottom, mapped: every spot hit where it is drawn", "%d of %d hit (bottom row: spots 2, 3, 5 %s)" % (hits(F), len(F), [r["hit"] for r in F if r["spot"] in (2, 3, 5)]))
     verdict("DEAD" not in log() and alive(), "the pass never failed and the compositor answers")
-    json.dump({"failed": fails, "checks": results, "D": D, "A": A, "E": E, "B": B, "C": C, "moved_A": mA, "moved_E": mE, "moved_B": mB, "moved_C": mC, "log": log().splitlines()}, open(OUT + "/aim-proof.json", "w"), indent=1)
+    json.dump({"failed": fails, "checks": results, "D": D, "A": A, "E": E, "F": F, "B": B, "C": C, "moved_A": mA, "moved_E": mE, "moved_B": mB, "moved_C": mC, "log": log().splitlines()}, open(OUT + "/aim-proof.json", "w"), indent=1)
 finally:
     seat("hyprctl", "plugin", "unload", HOME + "/cuda-pass.so")
     down()

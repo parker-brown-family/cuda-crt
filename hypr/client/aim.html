@@ -11,14 +11,15 @@
 // so a test can tell a fresh picture of it from a stale one.
 const m = 6, t = document.getElementById('t');
 const spots = [[0,0],[1,0],[0,1],[1,1],[.5,0],[.5,1],[0,.5],[1,.5],[.5,.5],[.25,.25],[.75,.25],[.25,.75],[.75,.75]];
-let i = 0, last = 'none';
+let i = 0, last = 'none', cx = -1, cy = -1;
 function place() {
   const [fx, fy] = spots[i % spots.length], W = innerWidth, H = innerHeight;
   const x = m + fx * (W - 22 - 2 * m), y = m + fy * (H - 22 - 2 * m);
   t.style.left = x + 'px'; t.style.top = y + 'px';
   t.style.background = i % 2 ? '#2bf0ff' : '#ff2bd6';
-  document.title = ['aim', i, i % spots.length, Math.round(x + 11), Math.round(y + 11), last].join(' ');
+  document.title = ['aim', i, i % spots.length, Math.round(x + 11), Math.round(y + 11), last, cx, cy].join(' ');
 }
-addEventListener('mousedown', e => { last = e.target === t ? 'hit' : 'miss'; i++; setTimeout(place, 120); });
+// the page point the click arrived at, so a test can measure the error in pixels, not just hit or miss
+addEventListener('mousedown', e => { last = e.target === t ? 'hit' : 'miss'; cx = Math.round(e.clientX); cy = Math.round(e.clientY); i++; setTimeout(place, 120); });
 addEventListener('resize', place); place();
 </script></body>

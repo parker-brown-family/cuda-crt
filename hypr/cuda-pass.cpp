@@ -23,6 +23,8 @@
 // $XDG_STATE_HOME/cuda-crt, else ~/.local/state/cuda-crt. Switches are files
 // there, read every frame:
 //   root           (required) one line: the path of the cuda-crt checkout
+//   set            name=value pairs laid over the look, e.g. curv=1.5,scan=0.3,ghost=0.02,
+//                  decay=120 (ms). Read every frame: rewrite it and the window changes
 //   off            stand the pass down and release its textures
 //   ttl            a number of seconds: stand down by itself after that long
 //   fail           throw in the middle of a frame, once, to prove the fallback
@@ -197,6 +199,34 @@ static void dress(bool phosphorOnly) {
         // Gentle glow. The lab's defaults were tuned on dark terminals; on a bright page
         // (a browser) they lift black text to grey. These keep text crisp on white.
         k.halation = 0.05f; k.glow = 0.10f; k.beam = 0.15f; k.glow_knee = 0.25f;
+    }
+    // `set`: name=value pairs (commas or new lines) laid over the look, read every
+    // frame, so a dial can be turned on a running window by rewriting one small file.
+    std::ifstream f(dir() + "/set");
+    std::string   all((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
+    static const std::pair<const char*, float Look::*> dials[] = {
+        {"curv", &Look::curv}, {"scan", &Look::scan}, {"scan_step", &Look::scan_step}, {"glow", &Look::glow}, {"bloom", &Look::bloom},
+        {"vign", &Look::vign}, {"specular", &Look::specular}, {"glare", &Look::glare}, {"aberr", &Look::aberr}, {"mask", &Look::mask},
+        {"tracking", &Look::tracking}, {"track_rest", &Look::track_rest}, {"track_sweep", &Look::track_sweep}, {"band_h", &Look::band_h},
+        {"track_bend", &Look::track_bend}, {"track_noise", &Look::track_noise}, {"track_chroma", &Look::track_chroma},
+        {"jiggle", &Look::jiggle}, {"flicker", &Look::flicker}, {"halation", &Look::halation}, {"glow_knee", &Look::glow_knee}, {"beam", &Look::beam}};
+    size_t pos = 0;
+    while (pos < all.size()) {
+        size_t end = all.find_first_of(",\n", pos);
+        if (end == std::string::npos) end = all.size();
+        const std::string pair = all.substr(pos, end - pos);
+        const size_t      eq   = pair.find('=');
+        if (eq != std::string::npos) {
+            std::string name = pair.substr(0, eq);
+            name.erase(0, name.find_first_not_of(" \t")); name.erase(name.find_last_not_of(" \t") + 1);
+            const float v = (float)atof(pair.c_str() + eq + 1);
+            for (auto& d : dials)
+                if (name == d.first && std::isfinite(v)) k.*(d.second) = std::min(1000.0f, std::max(0.0f, v));
+            if (name == "ghost") k.burn.gain = std::min(0.05f, std::max(0.0f, v));
+            if (name == "ghost_decay") k.burn.tau_decay = std::min(10.0, std::max(0.02, (double)v / 1000.0));
+            if (name == "decay") for (double& tau : k.phosphor.tau_decay) tau = std::min(2.0, std::max(0.001, (double)v / 1000.0));
+        }
+        pos = end + 1;
     }
     g.look = k;
 }

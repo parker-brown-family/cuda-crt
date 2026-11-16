@@ -231,7 +231,11 @@ def scene_b():
     up("HEADLESS-1 2560x1600@60 1.6 0 0 0\nHEADLESS-2 1920x1080@60 1 3 1600 0")
     start_client("still")
     try:
-        put("target", "title:still"); put("look", "phosphor"); put("off"); put("keep-drawing")
+        # PROVE_LOOK=tube and PROVE_SET="name=value,..." rehearse another configuration on one window.
+        # With the tube look the glass has a clock, so the "goes quiet" check is expected to fail.
+        put("target", "title:still"); put("look", os.environ.get("PROVE_LOOK", "phosphor")); put("off"); put("keep-drawing")
+        if os.environ.get("PROVE_SET"):
+            put("set", os.environ["PROVE_SET"])
         print("  plugin load:", seat("hyprctl", "plugin", "load", HOME + "/cuda-pass.so").stdout.strip().splitlines()[-1:])
         time.sleep(1.5)
         plain1, plain2 = shot("b1-panel-without", "HEADLESS-1"), shot("b1-side-without", "HEADLESS-2")

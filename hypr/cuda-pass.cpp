@@ -576,6 +576,15 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
     g.hooksOk      = g_positionHook && g_layerHook && g_moveHook;
     note(g.hooksOk ? "pointer: mapped through the glass" : "pointer: could not hook Hyprland's pointer routines; the glass stays flat so clicks stay true");
     g_stage = Event::bus()->m_events.render.stage.listen([](eRenderStage stage) {
+        // Hyprland's lone-fullscreen path renders the client directly and never
+        // emits RENDER_POST_WINDOWS. Keep the target on the composited path,
+        // as omarchy-crt's native pass does, without affecting other clients.
+        if (stage == RENDER_PRE && !flag("off") && (g.state == SEngine::NEW || g.state == SEngine::READY)) {
+            const std::string spec = line("target");
+            for (auto const& mon : State::monitorState()->monitors())
+                if (auto w = mon->m_solitaryClient.lock(); w && (spec.empty() || matches(w, spec)))
+                    mon->m_solitaryClient.reset();
+        }
         // Ask for another frame only while something is still moving (the phosphor's own
         // flag, or the glass's clock), and only on the monitor the target is on.
         if (stage == RENDER_POST) {

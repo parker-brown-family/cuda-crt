@@ -1,0 +1,77 @@
+#!/usr/bin/env python3
+"""Exercise the shipped playable launcher, FPS controls and cleanup in the sealed seat."""
+from pathlib import Path
+import sys
+
+HERE = str(Path(__file__).resolve().parent.parent)
+src = Path(HERE, "hypr/prove").read_text().split("which = sys.argv[3]")[0]
+exec(compile(src, "hypr/prove", "exec"))
+up("HEADLESS-1 1280x960@60 1 0 0 0")
+runner = None
+try:
+    for name, value in (("target", "class:previous-target"), ("look", "phosphor"), ("ttl", "321"), ("set", "glow=0.12")):
+        put(name, value)
+    previous_plugin = os.environ.get("PREVIOUS") == "1"
+    if previous_plugin:
+        put("loaded", HOME + "/cuda-pass.so\n")
+        r = seat("hyprctl", "plugin", "load", HOME + "/cuda-pass.so")
+        if r.returncode:
+            raise RuntimeError("previous plugin did not load: " + r.stdout)
+    names = ("root", "target", "look", "set", "ttl", "off", "loaded")
+    saved = {n: Path(FL, n).read_bytes() if Path(FL, n).exists() else None for n in names}
+    runner = subprocess.Popen([S + "/in", "env", "DOOM_ENGINE=" + HERE + "/.toolchain/crispy-doom/build/src/crispy-doom",
+                               HERE + "/tools/doom.sh", "--crt", "-warp", "1", "1", "-nomonsters",
+                               "-record", HOME + "/fps-input", "-maxdemo", "8"],
+                              stdout=open(OUT + "/session.log", "w"), stderr=subprocess.STDOUT, start_new_session=True)
+    win = None
+    for _ in range(160):
+        win = next((w for w in windows() if w["class"] == "crispy-doom" and w["fullscreen"] == 2), None)
+        if win and Path(FL, "loaded").exists() and "ready:" in log():
+            break
+        if runner.poll() is not None:
+            raise RuntimeError(Path(OUT, "session.log").read_text()[-2500:])
+        time.sleep(0.1)
+    verdict(win is not None and win["fullscreen"] == 2, "shipped launcher opens real Crispy Doom fullscreen")
+    verdict(Path(FL, "target").read_text().strip() == "class:crispy-doom" and "ready:" in log(),
+            "launcher uses a stable game-class target and initialises CUDA")
+    fr = shot("session-fullscreen")
+    verdict(fr is not None and "DEAD" not in log(), "fullscreen game is captured through the live CUDA pass")
+    keys = subprocess.run([S + "/in", "wtype", "-s", "500", "-P", "w", "-s", "1000", "-p", "w",
+                           "-P", "a", "-s", "1000", "-p", "a", "-P", "Control_L", "-s", "1000", "-p", "Control_L",
+                           "-s", "500", "-P", "q", "-s", "300", "-p", "q"], timeout=12)
+    if keys.returncode:
+        raise RuntimeError("virtual keyboard failed")
+    runner.wait(timeout=15)
+    demo = Path(HOME, "fps-input.lmp").read_bytes()
+    tics = []
+    for i in range(13, len(demo) - 3, 4):
+        if demo[i] == 128:
+            break
+        tics.append(demo[i:i + 4])
+    move = sum(t[0] != 0 for t in tics)
+    strafe = sum(t[1] != 0 for t in tics)
+    fire = sum(bool(t[3] & 1) for t in tics)
+    verdict(move > 0 and strafe > 0 and fire > 0, "game records WASD movement, strafing and firing",
+            f"{move} movement, {strafe} strafe, {fire} fire tics")
+    cfg = Path(FL, "doom/fps.cfg").read_text()
+    parsed = {p[0]: p[1] for line in cfg.splitlines() if len(p := line.split()) >= 2}
+    verdict(parsed.get("crispy_mouselook") == "1" and parsed.get("crispy_freeaim") == "1" and parsed.get("novert") == "1",
+            "engine saves mouse look, direct aim and no mouse walking")
+    current = {n: Path(FL, n).read_bytes() if Path(FL, n).exists() else None for n in names}
+    verdict(current == saved, "closing DOOM restores every preceding CUDA control file")
+    has_plugin = "cuda-pass" in seat("hyprctl", "plugin", "list").stdout
+    verdict(has_plugin == previous_plugin and alive(),
+            "closing DOOM restores the preceding plugin lifecycle and the compositor answers")
+    json.dump({"failed": fails, "checks": results}, open(OUT + "/session-proof.json", "w"), indent=2)
+finally:
+    if runner is not None and runner.poll() is None:
+        os.killpg(os.getpgid(runner.pid), signal.SIGTERM)
+        try:
+            runner.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            os.killpg(os.getpgid(runner.pid), signal.SIGKILL)
+    if os.environ.get("PREVIOUS") == "1":
+        seat("hyprctl", "plugin", "unload", HOME + "/cuda-pass.so")
+    down()
+print("all checks passed" if not fails else f"{fails} FAILED")
+sys.exit(1 if fails else 0)

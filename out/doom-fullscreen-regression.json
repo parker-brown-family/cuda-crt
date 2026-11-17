@@ -1,0 +1,98 @@
+{
+  "recorded_at": "2026-11-17T00:43:15.185503+00:00",
+  "command": "SOLITARY=1 FULLSCREEN_ONLY=1 hypr/prove-doom STATE OUT",
+  "before_fix": {
+    "failed": 3,
+    "checks": [
+      {
+        "pass": true,
+        "check": "DOOM really entered fullscreen",
+        "measured": ""
+      },
+      {
+        "pass": true,
+        "check": "control: fullscreen shortcut is eligible with CUDA off",
+        "measured": ""
+      },
+      {
+        "pass": false,
+        "check": "CUDA blocks the fullscreen shortcut on its target",
+        "measured": ""
+      },
+      {
+        "pass": false,
+        "check": "real CUDA/OpenGL interop initialised on DOOM",
+        "measured": "pointer: mapped through the glass"
+      },
+      {
+        "pass": false,
+        "check": "CUDA changes DOOM's starting-room picture",
+        "measured": "0.1% sampled pixels changed"
+      },
+      {
+        "pass": true,
+        "check": "an unrelated fullscreen window keeps its shortcut",
+        "measured": ""
+      }
+    ],
+    "log": [
+      "pointer: mapped through the glass"
+    ]
+  },
+  "after_fix": {
+    "failed": 0,
+    "checks": [
+      {
+        "pass": true,
+        "check": "DOOM really entered fullscreen",
+        "measured": ""
+      },
+      {
+        "pass": true,
+        "check": "control: fullscreen shortcut is eligible with CUDA off",
+        "measured": ""
+      },
+      {
+        "pass": true,
+        "check": "CUDA blocks the fullscreen shortcut on its target",
+        "measured": ""
+      },
+      {
+        "pass": true,
+        "check": "real CUDA/OpenGL interop initialised on DOOM",
+        "measured": "phosphor 1280x960 at 0,0 on a 1280x960 framebuffer"
+      },
+      {
+        "pass": true,
+        "check": "CUDA changes DOOM's starting-room picture",
+        "measured": "99.9% sampled pixels changed"
+      },
+      {
+        "pass": true,
+        "check": "CRT remains visible after switching to windowed",
+        "measured": "90.7% sampled pixels changed"
+      },
+      {
+        "pass": true,
+        "check": "CRT remains visible after switching to fullscreen-again",
+        "measured": "99.9% sampled pixels changed"
+      },
+      {
+        "pass": true,
+        "check": "an unrelated fullscreen window keeps its shortcut",
+        "measured": ""
+      }
+    ],
+    "log": [
+      "pointer: mapped through the glass",
+      "CUDA device that owns this GL context: 0",
+      "ready: NVIDIA GeForce RTX 3080 Laptop GPU, CUDA driver API 13.4, NVRTC 12.9, GL OpenGL ES 3.2 NVIDIA 615.78.08, kernel files compiled this start: 0, target: 0x55c9e5e53dd0, look: tube",
+      "framebuffer 1280x960: two GLES textures registered with CUDA",
+      "phosphor 1280x960 at 0,0 on a 1280x960 framebuffer",
+      "stood down: off",
+      "ready: NVIDIA GeForce RTX 3080 Laptop GPU, CUDA driver API 13.4, NVRTC 12.9, GL OpenGL ES 3.2 NVIDIA 615.78.08, kernel files compiled this start: 0, target: 0x55c9e5e53dd0, look: tube",
+      "framebuffer 1280x960: two GLES textures registered with CUDA",
+      "phosphor 1236x916 at 22,22 on a 1280x960 framebuffer"
+    ]
+  }
+}

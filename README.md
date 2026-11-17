@@ -13,8 +13,9 @@ the evidence: every path is measured against the same glass shader the
 [omarchy-crt](https://github.com/parker-brown-family/omarchy-crt) plugin ships.
 Read `decision.md` for what was found.
 
-**Nothing here touches a live desktop.** It renders offscreen through a headless
-EGL context and installs nothing outside this folder.
+The renderer runs offscreen through a headless EGL context. The optional
+`make doom` launcher loads the CUDA window pass into your running Hyprland for
+the game, then restores the preceding CUDA setup when the game closes.
 
 ## What is in it
 
@@ -133,6 +134,75 @@ Vector mode, no input:
 ```bash
 bin/crt_render . --size 1280x720 --fps 60 --vector lissajous --frames 480 --decay 40,120,70 --set scan=0,tracking=0,flicker=0,halation=0.55 | ffmpeg -f rawvideo -pix_fmt rgba -s 1280x720 -r 60 -i - -pix_fmt yuv420p lissajous.mp4
 ```
+
+## DOOM
+
+Build the pinned Crispy Doom engine, fetch and checksum-check the original
+shareware episode, and build the CUDA window pass:
+
+```bash
+make doom-setup
+```
+
+Play fullscreen with the CRT effect:
+
+```bash
+make doom
+```
+
+For a window instead:
+
+```bash
+tools/doom.sh --crt --windowed
+```
+
+WASD or arrows move forward/back and strafe. The mouse turns and aims up/down;
+left-click fires, E or right-click uses doors, Shift runs, and 1–7 or the wheel
+selects weapons. Alt+Enter toggles the game's fullscreen mode; Esc opens its
+menu. The local build is silent.
+
+The launcher loads its own CUDA pass, targets the game by class so fullscreen
+changes cannot strand it on an old window address, and restores the preceding
+CUDA state and loaded plugin when the game exits. The pass keeps a fullscreen
+target on Hyprland's composited path: its lone-window shortcut skips the render
+stage where CUDA draws the glass. Other fullscreen applications keep that
+shortcut. No Hyprland config file or persistent window rule is changed.
+
+`tools/doom-controls.cfg` and `tools/doom-fps.cfg` seed the game's profile once
+under `$XDG_STATE_HOME/cuda-crt/doom` (normally
+`~/.local/state/cuda-crt/doom`). Later in-game sensitivity adjustments persist.
+`DOOM_ENGINE` and `DOOM_WAD` can select an existing engine and your own game data.
+`tools/doom.sh` without `--crt` opens the game alone.
+
+The engine source, game data and compiled plugin are rebuildable files under
+ignored `.toolchain/` and `bin/` directories. The pinned engine is Crispy Doom
+7.2.0 at `4556710c0d119aa7a79d1c0cdaa2b265fe4b15e2`, GPL-2.0, running as a
+separate process. The shareware WAD has SHA-256
+`1d7d43be501e67d927e415e0b8f3e29c3bf33075e859721816f652a526cac771`.
+No engine binary or game data is committed to this MIT repository.
+
+Two proofs run inside omarchy-crt's sealed compositor, with no access to the
+live desktop. The fullscreen proof forces the shortcut eligible, checks that
+CUDA blocks it only for its target, and captures the effect across fullscreen,
+windowed and fullscreen-again transitions:
+
+```bash
+SOLITARY=1 FULLSCREEN_ONLY=1 hypr/prove-doom /tmp/cuda-doom-seat reports/doom-fullscreen
+```
+
+The session proof launches the shipped command, verifies WASD strafing and
+firing from DOOM's recorded input, checks the saved mouse-look profile, and
+checks cleanup. `PREVIOUS=1` also loads an existing CUDA pass first and checks
+that it is restored:
+
+```bash
+PREVIOUS=1 hypr/prove-doom-session /tmp/cuda-doom-session-seat reports/doom-session
+```
+
+`hypr/solitary-proof.cpp` is a test fixture for that sealed seat, never loaded
+by the live launcher. The original `hypr/prove-doom` movie/input proof remains
+available with a local Chocolate Doom build; its sampled 5 fps capture is
+visual evidence, not a gameplay performance measurement.
 
 ## Dials
 

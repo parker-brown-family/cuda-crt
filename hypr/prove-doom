@@ -1,0 +1,159 @@
+#!/usr/bin/env python3
+"""Real DOOM + CUDA glass in the sealed seat. Usage: hypr/prove-doom STATE OUT.
+
+Uses tools/doom.sh (DOOM_ENGINE and DOOM_WAD overrides supported). Saves a
+starting-room before/after pair, gameplay clip, input demo and machine-readable checks.
+The clip samples compositor output; its capture rate is not a game benchmark.
+"""
+import hashlib
+import shutil
+from pathlib import Path
+
+# Reuse the same sealed-seat helpers as prove-browser; no live desktop access.
+import sys
+HERE = str(Path(__file__).resolve().parent.parent)
+src = Path(HERE, "hypr/prove").read_text().split("which = sys.argv[3]")[0]
+exec(compile(src, "hypr/prove", "exec"))
+Path(OUT, "doom-proof.json").unlink(missing_ok=True)
+SO = HOME + "/cuda-pass.so"
+up("HEADLESS-1 1280x960@60 1 0 0 0")
+encoder = None
+fixture = None
+try:
+    engine = os.environ.get("DOOM_ENGINE", HERE + "/.toolchain/" +
+                            ("crispy-doom/build/src/crispy-doom" if os.environ.get("FULLSCREEN_ONLY") == "1"
+                             else "chocolate-doom/build/src/chocolate-doom"))
+    # The sandbox's root is read-only; saves, config and recording go in its HOME.
+    game = subprocess.Popen([S + "/in", "env", "SDL_VIDEODRIVER=wayland",
+                             "DOOM_ENGINE=" + engine,
+                             "DOOM_WAD=" + os.environ.get("DOOM_WAD", HERE + "/.toolchain/doom1.wad"),
+                             HERE + "/tools/doom.sh", "-config", HOME + "/doom.cfg",
+                             "-extraconfig", HOME + "/chocolate.cfg", "-savedir", HOME,
+                             "-warp", "1", "1", "-skill", "2", "-nomonsters", "-nogui",
+                             "-maxdemo", "8", "-record", HOME + "/input"],
+                            cwd=HOME, stdout=open(HOME + "/doom.log", "w"), stderr=subprocess.STDOUT,
+                            start_new_session=True)
+    clients.append(game)
+    win = None
+    for _ in range(80):
+        win = next((w for w in windows() if "doom" in (w.get("class", "") + w.get("title", "")).lower()), None)
+        if win or game.poll() is not None:
+            break
+        time.sleep(0.25)
+    if not win:
+        raise RuntimeError("DOOM did not open: " + Path(HOME, "doom.log").read_text()[-2000:])
+    target = "address:" + win["address"]
+    for command in (f'hl.dsp.focus({{window="{target}"}})',
+                    f'hl.dsp.window.fullscreen({{window="{target}",mode="fullscreen",action="set"}})'):
+        r = seat("hyprctl", "dispatch", command)
+        if r.returncode:
+            raise RuntimeError("fullscreen setup failed: " + r.stdout + r.stderr)
+    time.sleep(0.5)
+    win = next((w for w in windows() if w["address"] == win["address"]), None)
+    verdict(win is not None and win["fullscreen"] == 2, "DOOM really entered fullscreen")
+
+    time.sleep(2)
+    if os.environ.get("SOLITARY") == "1":
+        fixture = HOME + "/solitary-proof.so"
+        subprocess.run([HERE + "/hypr/build", fixture], check=True,
+                       env={**os.environ, "CUDA_PASS_SOURCE": HERE + "/hypr/solitary-proof.cpp"})
+        r = seat("hyprctl", "plugin", "load", fixture)
+        if r.returncode:
+            raise RuntimeError("solitary fixture did not load: " + r.stdout)
+    put("target", win["address"]); put("look", "tube"); put("ttl", "120")
+    put("keep-drawing"); put("off")
+    loaded = seat("hyprctl", "plugin", "load", SO)
+    print("plugin load:", loaded.stdout.strip(), flush=True)
+    time.sleep(1)
+    plain = shot("doom-plain")
+    if fixture:
+        verdict(Path(HOME, "solitary.now").read_text().strip() == "1",
+                "control: fullscreen shortcut is eligible with CUDA off")
+    drop("off"); time.sleep(2)
+    curved = shot("doom-crt")
+    if fixture:
+        verdict(Path(HOME, "solitary.now").read_text().strip() == "0",
+                "CUDA blocks the fullscreen shortcut on its target")
+    verdict("ready:" in log() and "registered with CUDA" in log() and "DEAD" not in log(),
+            "real CUDA/OpenGL interop initialised on DOOM", log().splitlines()[-1])
+    d = differ(plain[2], curved[2]) if plain and curved else None
+    verdict(d is not None and d > 0.2, "CUDA changes DOOM's starting-room picture",
+            "unavailable" if d is None else "%.1f%% sampled pixels changed" % (100 * d))
+    if os.environ.get("FULLSCREEN_ONLY") == "1":
+        for mode, action in (("windowed", "unset"), ("fullscreen-again", "set")):
+            r = seat("hyprctl", "dispatch", f'hl.dsp.window.fullscreen({{window="{target}",mode="fullscreen",action="{action}"}})')
+            if r.returncode:
+                raise RuntimeError(r.stdout + r.stderr)
+            time.sleep(0.5)
+            put("off"); time.sleep(0.5)
+            flat = shot("doom-" + mode + "-plain")
+            drop("off"); time.sleep(1)
+            tube = shot("doom-" + mode + "-crt")
+            delta = differ(flat[2], tube[2]) if flat and tube else None
+            verdict(delta is not None and delta > 0.2, "CRT remains visible after switching to " + mode,
+                    "unavailable" if delta is None else f"{100 * delta:.1f}% sampled pixels changed")
+        # The fix must not remove the shortcut from an unrelated fullscreen app.
+        put("target", "class:not-this-game"); time.sleep(0.5)
+        verdict(Path(HOME, "solitary.now").read_text().strip() == "1",
+                "an unrelated fullscreen window keeps its shortcut")
+        json.dump({"failed": fails, "checks": results, "log": log().splitlines()},
+                  open(OUT + "/doom-proof.json", "w"), indent=2)
+        sys.exit(1 if fails else 0)
+    first_count = frames()
+    encoder = subprocess.Popen(["ffmpeg", "-y", "-v", "error", "-f", "rawvideo", "-pix_fmt", "rgba",
+                                "-s", "1280x960", "-r", "5", "-i", "-", "-an", "-c:v", "libx264",
+                                "-preset", "fast", "-crf", "19", "-pix_fmt", "yuv420p", "-movflags", "+faststart",
+                                OUT + "/doom-crt.mp4"], stdin=subprocess.PIPE)
+    hashes = []
+    # Let the newly created keyboard enter the game before its first key press.
+    controls = subprocess.Popen([S + "/in", "wtype", "-s", "500", "-P", "Up", "-s", "2000", "-p", "Up",
+                                 "-P", "Right", "-s", "2000", "-p", "Right",
+                                 "-P", "Control_L", "-s", "4000", "-p", "Control_L",
+                                 "-s", "8000", "-P", "q", "-s", "300", "-p", "q"],
+                                start_new_session=True)
+    clients.append(controls)
+    started = time.monotonic()
+    for i in range(50):
+        fr = shot("_doom-capture")
+        if fr is None:
+            raise RuntimeError("DOOM capture stopped")
+        # Ignore the moving rim: watch the central game picture as well.
+        center = b"".join(fr[2][(y * 1280 + 400) * 4:(y * 1280 + 880) * 4] for y in range(260, 650))
+        hashes.append(hashlib.sha256(center).hexdigest())
+        encoder.stdin.write(fr[2])
+        time.sleep(max(0, started + (i + 1) / 5 - time.monotonic()))
+    capture_seconds = time.monotonic() - started
+    encoder.stdin.close()
+    if encoder.wait(timeout=30):
+        raise RuntimeError("video encoder failed")
+    encoder = None
+    last_count = frames()
+    verdict(len(set(hashes)) > 10 and first_count is not None and last_count is not None and last_count > first_count,
+            "gameplay kept changing through the CUDA pass", f"{len(set(hashes))}/50 distinct centre frames; pass {first_count} -> {last_count}")
+    # A DOOM-format demo records what the game actually received, not what we sent.
+    # End the recording from the same virtual keyboard as the game controls.
+    # -nogui keeps Chocolate Doom's "Demo recorded" message from opening a dialog.
+    controls.wait(timeout=20)
+    game.wait(timeout=10)
+    demo = Path(HOME, "input.lmp").read_bytes()
+    tics = [demo[i:i + 4] for i in range(13, len(demo) - 4, 4)]
+    moved = sum(t[0] != 0 for t in tics)
+    turned = sum(t[2] != 0 for t in tics)
+    fired = sum(bool(t[3] & 1) for t in tics)
+    verdict(len(demo) >= 13 and demo[0] == 109 and demo[-1] == 0x80 and moved > 0 and turned > 0 and fired > 0,
+            "the game recorded movement, turning and firing input", f"{moved} movement, {turned} turning, {fired} firing tics")
+    verdict("DEAD" not in log() and alive(), "CUDA stayed healthy and the compositor answers")
+    shutil.copyfile(HOME + "/input.lmp", OUT + "/input.lmp")
+    shutil.copyfile(HOME + "/doom.log", OUT + "/doom.log")
+    json.dump({"failed": fails, "checks": results, "capture_seconds": capture_seconds,
+               "capture_frames": 50, "encoded_fps": 5, "log": log().splitlines()},
+              open(OUT + "/doom-proof.json", "w"), indent=2)
+finally:
+    if encoder is not None:
+        encoder.kill(); encoder.wait()
+    seat("hyprctl", "plugin", "unload", SO)
+    if fixture:
+        seat("hyprctl", "plugin", "unload", fixture)
+    down()
+print("all checks passed" if not fails else f"{fails} FAILED")
+sys.exit(1 if fails else 0)

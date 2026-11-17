@@ -20,7 +20,7 @@ B. ONE window, phosphor only, on a two-monitor desk (a 2560x1600 panel at scale
    window changes; the other monitor is untouched; the pass goes quiet; and when
    its time is up it stands down by itself and the picture is the plain one again.
 """
-import json, os, signal, struct, subprocess, sys, time, zlib
+import json, os, shutil, signal, struct, subprocess, sys, time, zlib
 
 S, OUT = os.path.abspath(sys.argv[1]), os.path.abspath(sys.argv[2])
 HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -159,7 +159,11 @@ def up(layout):
     subprocess.run([OMA + "/native/rig/up", S], check=True, env={**os.environ, "CRT_SEAT": layout})
     os.makedirs(FL, exist_ok=True)
     for f in os.listdir(FL):
-        os.unlink(f"{FL}/{f}")
+        path = f"{FL}/{f}"
+        if os.path.isdir(path) and not os.path.islink(path):
+            shutil.rmtree(path)
+        else:
+            os.unlink(path)
     put("root", HERE + "\n")
     subprocess.run(["rm", "-rf", HOME + "/cuda-client"])
     subprocess.run(["cp", "-r", HERE + "/hypr/client", HOME + "/cuda-client"], check=True)

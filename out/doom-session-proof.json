@@ -1,0 +1,42 @@
+{
+  "failed": 0,
+  "checks": [
+    {
+      "pass": true,
+      "check": "shipped launcher opens real Crispy Doom fullscreen",
+      "measured": ""
+    },
+    {
+      "pass": true,
+      "check": "launcher uses a stable game-class target and initialises CUDA",
+      "measured": ""
+    },
+    {
+      "pass": true,
+      "check": "fullscreen game is captured through the live CUDA pass",
+      "measured": ""
+    },
+    {
+      "pass": true,
+      "check": "game records WASD movement, strafing and firing",
+      "measured": "36 movement, 35 strafe, 35 fire tics"
+    },
+    {
+      "pass": true,
+      "check": "engine saves mouse look, direct aim and no mouse walking",
+      "measured": ""
+    },
+    {
+      "pass": true,
+      "check": "closing DOOM restores every preceding CUDA control file",
+      "measured": ""
+    },
+    {
+      "pass": true,
+      "check": "closing DOOM restores the preceding plugin lifecycle and the compositor answers",
+      "measured": ""
+    }
+  ],
+  "recorded_at": "2026-11-17T00:43:57.057634+00:00",
+  "command": "PREVIOUS=1 hypr/prove-doom-session STATE OUT"
+}

@@ -1,0 +1,65 @@
+#!/usr/bin/env python3
+"""Build the pinned DOOM engine and CUDA plugin inside this checkout."""
+import hashlib
+import os
+from pathlib import Path
+import subprocess
+import tempfile
+import urllib.request
+
+ROOT = Path(__file__).resolve().parent.parent
+SOURCE = ROOT / ".toolchain/crispy-doom"
+REV = "4556710c0d119aa7a79d1c0cdaa2b265fe4b15e2"
+WAD_HASH = "1d7d43be501e67d927e415e0b8f3e29c3bf33075e859721816f652a526cac771"
+
+
+def run(*args):
+    subprocess.run(args, cwd=ROOT, check=True)
+
+
+def sha(path):
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def main():
+    SOURCE.parent.mkdir(parents=True, exist_ok=True)
+    cloned = not SOURCE.exists()
+    if cloned:
+        run("git", "clone", "--no-checkout", "--depth", "1",
+            "https://github.com/fabiangreffrath/crispy-doom.git", str(SOURCE))
+    head = subprocess.check_output(["git", "-C", str(SOURCE), "rev-parse", "HEAD"], text=True).strip()
+    if not cloned and subprocess.check_output(["git", "-C", str(SOURCE), "status", "--porcelain"], text=True).strip():
+        raise RuntimeError("The local Crispy Doom source has changes; leave it intact and select a clean checkout.")
+    if head != REV:
+        run("git", "-C", str(SOURCE), "fetch", "--depth", "1", "origin", REV)
+    run("git", "-C", str(SOURCE), "checkout", "--detach", REV)
+    run("cmake", "-S", str(SOURCE), "-B", str(SOURCE / "build"), "-DCMAKE_BUILD_TYPE=Release",
+        "-DENABLE_SDL2_MIXER=OFF", "-DENABLE_SDL2_NET=OFF", "-DCMAKE_C_FLAGS=-include SDL2/SDL.h")
+    run("cmake", "--build", str(SOURCE / "build"), "--target", "crispy-doom", "-j4")
+    wad = ROOT / ".toolchain/doom1.wad"
+    if not os.environ.get("DOOM_WAD"):
+        if not wad.exists():
+            url = "https://raw.githubusercontent.com/markrussinovich/DoomPaint/main/wad/doom1.wad"
+            with tempfile.NamedTemporaryFile(dir=wad.parent, delete=False) as tmp:
+                path = Path(tmp.name)
+                try:
+                    with urllib.request.urlopen(url, timeout=40) as response:
+                        tmp.write(response.read(8 * 1024 * 1024))
+                    tmp.close()
+                    if sha(path) != WAD_HASH:
+                        raise RuntimeError("Downloaded shareware WAD checksum does not match; nothing installed.")
+                    path.replace(wad)
+                finally:
+                    path.unlink(missing_ok=True)
+        if sha(wad) != WAD_HASH:
+            raise RuntimeError("Local doom1.wad checksum differs; supply your own IWAD through DOOM_WAD.")
+    elif not Path(os.environ["DOOM_WAD"]).is_file():
+        raise RuntimeError("DOOM_WAD does not name an existing game-data file.")
+    if not (ROOT / ".toolchain/nvidia/cuda_nvrtc/include/nvrtc.h").exists():
+        run("make", "toolchain")
+    run(str(ROOT / "hypr/build"), str(ROOT / "bin/cuda-pass-doom.so"))
+    print("Ready: make doom (fullscreen) or tools/doom.sh --crt --windowed")
+
+
+if __name__ == "__main__":
+    main()

@@ -30,4 +30,14 @@ bin/crt_render: src/crt_render.cpp kernels/glass.cu src/pipelines.hpp src/look.h
 
 clean:
 	rm -rf bin
-.PHONY: all toolchain clean
+
+doom-setup:
+	tools/doom-setup
+
+bin/cuda-pass-doom.so: hypr/cuda-pass.cpp hypr/build src/cuda_path.hpp src/cudart.hpp src/look.hpp phosphor_params.h phosphor_half.h tube_map.h
+	hypr/build $@
+
+doom: bin/cuda-pass-doom.so
+	tools/doom.sh --crt
+
+.PHONY: all toolchain clean doom-setup doom

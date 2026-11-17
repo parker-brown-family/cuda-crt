@@ -140,6 +140,8 @@ bin/crt_render . --size 1280x720 --fps 60 --vector lissajous --frames 480 --deca
 Build the pinned Crispy Doom engine, fetch and checksum-check the original
 shareware episode, and build the CUDA window pass:
 
+DOOM setup also needs CMake and SDL2 development headers.
+
 ```bash
 make doom-setup
 ```
@@ -159,7 +161,13 @@ tools/doom.sh --crt --windowed
 WASD or arrows move forward/back and strafe. The mouse turns and aims up/down;
 left-click fires, E or right-click uses doors, Shift runs, and 1–7 or the wheel
 selects weapons. Alt+Enter toggles the game's fullscreen mode; Esc opens its
-menu. The local build is silent.
+menu. Sound effects and OPL music are enabled by default; pass `-nosound` to
+`tools/doom.sh` when silence is wanted. Setup builds a pinned SDL2_mixer audio
+backend locally, so no system-wide audio package installation is needed.
+
+`tools/doom-audio-check` checks effects and OPL music separately against a
+temporary, inaudible PulseAudio/PipeWire sink. It records neither the microphone
+nor other applications and removes the test sink afterward.
 
 The launcher loads its own CUDA pass, targets the game by class so fullscreen
 changes cannot strand it on an old window address, and restores the preceding

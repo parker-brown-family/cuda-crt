@@ -20,7 +20,7 @@ try:
     names = ("root", "target", "look", "set", "ttl", "off", "loaded")
     saved = {n: Path(FL, n).read_bytes() if Path(FL, n).exists() else None for n in names}
     runner = subprocess.Popen([S + "/in", "env", "DOOM_ENGINE=" + HERE + "/.toolchain/crispy-doom/build/src/crispy-doom",
-                               HERE + "/tools/doom.sh", "--crt", "-warp", "1", "1", "-nomonsters",
+                               HERE + "/tools/doom.sh", "--crt", "-warp", "1", "1", "-nomonsters", "-nosound",
                                "-record", HOME + "/fps-input", "-maxdemo", "8"],
                               stdout=open(OUT + "/session.log", "w"), stderr=subprocess.STDOUT, start_new_session=True)
     win = None

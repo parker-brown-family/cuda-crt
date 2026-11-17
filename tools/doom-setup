@@ -11,6 +11,7 @@ ROOT = Path(__file__).resolve().parent.parent
 SOURCE = ROOT / ".toolchain/crispy-doom"
 REV = "4556710c0d119aa7a79d1c0cdaa2b265fe4b15e2"
 WAD_HASH = "1d7d43be501e67d927e415e0b8f3e29c3bf33075e859721816f652a526cac771"
+MIXER_REV = "171eb2d420d5643e4ee11514a06e04a41a463bbd"  # SDL_mixer 2.8.1
 
 
 def run(*args):
@@ -33,8 +34,27 @@ def main():
     if head != REV:
         run("git", "-C", str(SOURCE), "fetch", "--depth", "1", "origin", REV)
     run("git", "-C", str(SOURCE), "checkout", "--detach", REV)
+    mixer = ROOT / ".toolchain/SDL_mixer"
+    audio = ROOT / ".toolchain/audio"
+    if not mixer.exists():
+        run("git", "clone", "--depth", "1", "--branch", "release-2.8.1",
+            "https://github.com/libsdl-org/SDL_mixer.git", str(mixer))
+    mixer_head = subprocess.check_output(["git", "-C", str(mixer), "rev-parse", "HEAD"], text=True).strip()
+    if mixer_head != MIXER_REV:
+        raise RuntimeError("The SDL_mixer checkout differs from the pinned audio backend; leave it intact and select a clean checkout.")
+    if subprocess.run(["git", "-C", str(mixer), "diff", "--quiet", "HEAD"]).returncode:
+        raise RuntimeError("The pinned SDL_mixer source has local changes; leave them intact and select a clean checkout.")
+    run("cmake", "-S", str(mixer), "-B", str(mixer / "build"), "-DCMAKE_BUILD_TYPE=Release",
+        "-DCMAKE_INSTALL_PREFIX=" + str(audio), "-DCMAKE_INSTALL_LIBDIR=lib",
+        "-DSDL2MIXER_SAMPLES=OFF", "-DSDL2MIXER_VENDORED=OFF", "-DSDL2MIXER_INSTALL=ON",
+        "-DSDL2MIXER_FLAC=OFF", "-DSDL2MIXER_MOD=OFF", "-DSDL2MIXER_MP3=OFF",
+        "-DSDL2MIXER_MIDI=OFF", "-DSDL2MIXER_OPUS=OFF", "-DSDL2MIXER_VORBIS=OFF",
+        "-DSDL2MIXER_WAVPACK=OFF")
+    run("cmake", "--build", str(mixer / "build"), "-j4")
+    run("cmake", "--install", str(mixer / "build"))
     run("cmake", "-S", str(SOURCE), "-B", str(SOURCE / "build"), "-DCMAKE_BUILD_TYPE=Release",
-        "-DENABLE_SDL2_MIXER=OFF", "-DENABLE_SDL2_NET=OFF", "-DCMAKE_C_FLAGS=-include SDL2/SDL.h")
+        "-DENABLE_SDL2_MIXER=ON", "-DENABLE_SDL2_NET=OFF", "-DCMAKE_C_FLAGS=",
+        "-DCMAKE_PREFIX_PATH=" + str(audio), "-DCMAKE_BUILD_RPATH=" + str(audio / "lib"))
     run("cmake", "--build", str(SOURCE / "build"), "--target", "crispy-doom", "-j4")
     wad = ROOT / ".toolchain/doom1.wad"
     if not os.environ.get("DOOM_WAD"):

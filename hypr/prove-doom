@@ -29,7 +29,7 @@ try:
                              "DOOM_WAD=" + os.environ.get("DOOM_WAD", HERE + "/.toolchain/doom1.wad"),
                              HERE + "/tools/doom.sh", "-config", HOME + "/doom.cfg",
                              "-extraconfig", HOME + "/chocolate.cfg", "-savedir", HOME,
-                             "-warp", "1", "1", "-skill", "2", "-nomonsters", "-nogui",
+                             "-warp", "1", "1", "-skill", "2", "-nomonsters", "-nogui", "-nosound",
                              "-maxdemo", "8", "-record", HOME + "/input"],
                             cwd=HOME, stdout=open(HOME + "/doom.log", "w"), stderr=subprocess.STDOUT,
                             start_new_session=True)

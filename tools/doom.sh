@@ -24,4 +24,4 @@ if [[ "$(basename "$engine")" == crispy-doom ]]; then
   [[ -f "$state/fps.cfg" ]] || cp "$root/tools/doom-fps.cfg" "$state/fps.cfg"
   profile=(-config "$state/default.cfg" -extraconfig "$state/fps.cfg" -savedir "$state")
 fi
-exec "$engine" -iwad "$wad" -window -width 960 -height 720 -nosound "${profile[@]}" "$@"
+exec "$engine" -iwad "$wad" -window -width 960 -height 720 "${profile[@]}" "$@"

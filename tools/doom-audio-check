@@ -1,0 +1,84 @@
+#!/usr/bin/env python3
+"""Check effects and music separately through a temporary, inaudible Pulse sink."""
+import array
+import datetime
+import json
+import math
+import os
+from pathlib import Path
+import subprocess
+import tempfile
+import time
+
+ROOT = Path(__file__).resolve().parent.parent
+
+
+def main():
+    env = dict(os.environ)
+    env.setdefault("XDG_RUNTIME_DIR", "/run/user/" + str(os.getuid()))
+    env.setdefault("PULSE_SERVER", "unix:" + env["XDG_RUNTIME_DIR"] + "/pulse/native")
+    name = "cuda_doom_audio_" + str(os.getpid())
+    module = subprocess.check_output(["pactl", "load-module", "module-null-sink", "sink_name=" + name,
+                                      "rate=44100", "channels=2"], env=env, text=True).strip()
+    results = []
+    try:
+        with tempfile.TemporaryDirectory(prefix="doom-audio-") as temp:
+            for label, flag in (("sound-effects", "-nomusic"), ("OPL-music", "-nosfx")):
+                local = {**env, "XDG_STATE_HOME": temp + "/" + label, "SDL_VIDEODRIVER": "dummy",
+                         "SDL_RENDER_DRIVER": "software", "SDL_AUDIODRIVER": "pulseaudio", "PULSE_SINK": name}
+                output = Path(temp, label + ".raw")
+                with output.open("wb") as pcm:
+                    record = subprocess.Popen(["parec", "--device=" + name + ".monitor", "--raw",
+                                               "--format=s16le", "--rate=44100", "--channels=2"],
+                                              stdout=pcm, stderr=subprocess.PIPE, env=env)
+                    game = None
+                    try:
+                        time.sleep(0.3)
+                        game = subprocess.Popen([str(ROOT / "tools/doom.sh"), "-nogui", "-timedemo", "demo1", flag],
+                                                cwd=ROOT, env=local, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+                        # SDL's device selection can override PULSE_SINK. Route only
+                        # this test process's stream; never change the default sink.
+                        routed = False
+                        for _ in range(100):
+                            streams = json.loads(subprocess.check_output(["pactl", "-f", "json", "list", "sink-inputs"], env=env))
+                            own = next((s for s in streams if s.get("properties", {}).get("application.process.id") == str(game.pid)), None)
+                            if own:
+                                subprocess.run(["pactl", "move-sink-input", str(own["index"]), name], env=env, check=True)
+                                routed = True
+                                break
+                            if game.poll() is not None:
+                                break
+                            time.sleep(0.05)
+                        stdout, stderr = game.communicate(timeout=40)
+                        time.sleep(0.2)
+                    finally:
+                        if game is not None and game.poll() is None:
+                            game.kill()
+                            game.communicate()
+                        record.terminate()
+                        record.wait(timeout=5)
+                data = output.read_bytes()
+                samples = array.array("h", data[:len(data) // 2 * 2])
+                if not samples:
+                    raise RuntimeError(label + ": no audio samples captured")
+                peak = max(abs(s) for s in samples)
+                rms = math.sqrt(sum(s * s for s in samples) / len(samples))
+                ok = routed and peak > 100 and rms > 10 and "gametics" in stdout + stderr
+                row = {"check": label + " produces audio with the other channel disabled", "pass": ok,
+                       "peak_s16": peak, "rms_s16": round(rms, 2), "samples": len(samples), "routed_test_stream": routed}
+                results.append(row)
+                print(json.dumps(row), flush=True)
+                if not ok:
+                    print((stdout + stderr)[-2000:])
+    finally:
+        subprocess.run(["pactl", "unload-module", module], env=env, check=True)
+    out = ROOT / "out/doom-audio-proof.json"
+    out.write_text(json.dumps({"recorded_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+                               "failed": sum(not r["pass"] for r in results), "checks": results,
+                               "isolation": "temporary null sink; no microphone or other applications recorded"}, indent=2) + "\n")
+    if not all(r["pass"] for r in results):
+        raise SystemExit(1)
+
+
+if __name__ == "__main__":
+    main()

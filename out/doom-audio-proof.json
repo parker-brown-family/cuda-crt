@@ -1,0 +1,22 @@
+{
+  "failed": 0,
+  "checks": [
+    {
+      "check": "sound-effects produces audio with the other channel disabled",
+      "pass": true,
+      "peak_s16": 30798,
+      "rms_s16": 3334.05,
+      "samples": 589824,
+      "routed_test_stream": true
+    },
+    {
+      "check": "OPL-music produces audio with the other channel disabled",
+      "pass": true,
+      "peak_s16": 221,
+      "rms_s16": 31.72,
+      "samples": 622592,
+      "routed_test_stream": true
+    }
+  ],
+  "isolation": "temporary null sink; no microphone or other applications recorded"
+}

@@ -65,7 +65,8 @@ def main():
             old_removed = True
         put("root", (str(ROOT) + "\n").encode())
         put("look", b"tube\n")
-        put("set", b"halation=0.08,glow=0.15,beam=0.2,glow_knee=0.2\n")
+        profile = state / "tube-profile.set"
+        put("set", profile.read_bytes() if profile.exists() else b"halation=0.08,glow=0.15,beam=0.2,glow_knee=0.2\n")
         for name in ("off", "ttl"):
             (state / name).unlink(missing_ok=True)
         args = [str(ROOT / "tools/doom.sh"), "-nogui"]

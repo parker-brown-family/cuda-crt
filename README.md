@@ -214,6 +214,20 @@ visual evidence, not a gameplay performance measurement.
 
 ## Dials
 
+Open the live CRT settings panel from the repository:
+
+```bash
+make crt-config
+```
+
+The sliders change the active Hyprland CUDA pass and save a profile for later
+`make doom` sessions. Opening the panel reads the current settings without
+changing the picture. It exposes the compositor's supported controls, including
+curve, safe edge, phosphor fade, glow, scanlines and tracking. The panel service
+runs under systemd on loopback port 8788; the browser opens as a small app window.
+Settings live in `~/.local/state/cuda-crt/tube-profile.set` (or the equivalent
+under `XDG_STATE_HOME`). The offline `tools/tube.sh` preview keeps its own panel.
+
 `--decay r,g,b` and `--rise` are the phosphor's time constants in milliseconds
 (one value sets all three). `--burn rise,decay` sets the ghost's. They are
 values for the eye, not measured from a real tube.

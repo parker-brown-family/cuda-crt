@@ -1,0 +1,140 @@
+#!/usr/bin/env python3
+"""Open the repository sliders against the live CUDA CRT, or --serve them."""
+import argparse
+import copy
+import json
+import os
+from pathlib import Path
+import subprocess
+import tempfile
+import time
+import urllib.error
+import urllib.request
+from http.server import ThreadingHTTPServer
+
+from knobs import Handler, Knobs, read_json
+
+ROOT = Path(__file__).resolve().parent.parent
+PORT = 8788
+
+
+def publish(path, data):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = None
+    try:
+        with tempfile.NamedTemporaryFile(dir=path.parent, delete=False) as f:
+            temporary = Path(f.name)
+            f.write(data); f.flush(); os.fsync(f.fileno())
+        temporary.replace(path)
+    finally:
+        if temporary:
+            temporary.unlink(missing_ok=True)
+
+
+class LiveKnobs(Knobs):
+    def __init__(self, state):
+        self.state = Path(state)
+        self.live = False
+        # Only expose controls implemented by the compositor pass. The offline
+        # renderer also has per-channel decay and rise controls that it lacks.
+        excluded = {"decay_r", "decay_g", "decay_b", "rise", "ghost_rise"}
+        dials = [d for d in read_json(ROOT / "tools/dials.json") if d["name"] not in excluded]
+        for name, label, group, low, high, step, default, unit, help_ in (
+            ("decay", "Phosphor fade", "Phosphor", 1, 400, 1, 50, "ms", "How long the light takes to fade"),
+            ("core", "Flat middle", "Tube", 0, .95, .01, 0, "", "Keep the middle flat and bend toward the rim"),
+            ("inset", "Safe edge", "Tube", 0, .12, .005, .06, "", "Draw the picture smaller inside the glass"),
+            ("glow_knee", "Glow threshold", "Phosphor", 0, 1, .01, .02, "", "How bright a pixel must be before it glows")):
+            if not any(d["name"] == name for d in dials):
+                dials.append(dict(name=name, label=label, group=group, min=low, max=high,
+                                  step=step, default=default, unit=unit, help=help_))
+        presets = {}
+        for name, original in read_json(ROOT / "tools/presets.json").items():
+            values = dict(original)
+            channels = [values.pop(k) for k in ("decay_r", "decay_g", "decay_b") if k in values]
+            if channels:
+                if len(channels) != 3 or len(set(channels)) != 1:
+                    continue
+                values["decay"] = channels[0]
+            if values.pop("ghost_rise", 500) != 500:
+                continue
+            presets[name] = values
+        super().__init__(dials, presets, self.state / "controls.json")
+        defaults = {d["name"]: d["default"] for d in self.dials}
+        source = self.state / "set"
+        if not source.exists():
+            source = self.state / "tube-profile.set"
+        restored, self.extra = {}, {}
+        if source.exists():
+            for part in source.read_text().replace("\n", ",").split(","):
+                if "=" not in part:
+                    continue
+                key, value = (p.strip() for p in part.split("=", 1))
+                if key in self.by_name:
+                    restored[key] = float(value)
+                else:
+                    self.extra[key] = value
+        self.current["values"] = {**defaults, **self.clamp(restored)}
+        self.current["preset"] = None
+        self.live = True  # Opening the panel does not change the active effect.
+
+    def set(self, values, preset=None):
+        if not self.live:
+            return super().set(values, preset)
+        values = self.clamp(values)
+        if preset is not None and (not isinstance(preset, str) or preset not in self.presets):
+            raise ValueError("unknown preset")
+        with self.lock:
+            next_state = {"rev": self.current["rev"] + 1, "preset": preset,
+                          "values": {**self.current["values"], **values}}
+            pairs = {**self.extra, **next_state["values"]}
+            data = (",".join(f"{k}={v}" for k, v in pairs.items()) + "\n").encode()
+            publish(self.state / "tube-profile.set", data)
+            publish(self.state / "set", data)
+            self.current = next_state
+            return copy.deepcopy(next_state)
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--serve", action="store_true")
+    parser.add_argument("--state", type=Path, default=Path(os.environ.get("XDG_STATE_HOME", str(Path.home() / ".local/state"))) / "cuda-crt")
+    args = parser.parse_args()
+    if args.serve:
+        server = ThreadingHTTPServer(("127.0.0.1", PORT), Handler)
+        try:
+            server.knobs = LiveKnobs(args.state)
+            print(f"Live CRT controls: http://127.0.0.1:{PORT}/", flush=True)
+            server.serve_forever()
+        finally:
+            server.server_close()
+        return
+    env = dict(os.environ)
+    env.setdefault("XDG_RUNTIME_DIR", "/run/user/" + str(os.getuid()))
+    env.setdefault("DBUS_SESSION_BUS_ADDRESS", "unix:path=" + env["XDG_RUNTIME_DIR"] + "/bus")
+    if not env.get("WAYLAND_DISPLAY"):
+        instances = json.loads(subprocess.check_output(["hyprctl", "instances", "-j"], env=env))
+        if len(instances) != 1:
+            raise RuntimeError("Select your compositor with WAYLAND_DISPLAY before opening the panel.")
+        env["WAYLAND_DISPLAY"] = instances[0]["wl_socket"]
+    active = subprocess.run(["systemctl", "--user", "is-active", "--quiet", "cuda-crt-controls.service"], env=env).returncode == 0
+    if not active:
+        subprocess.run(["systemd-run", "--user", "--unit=cuda-crt-controls", "--collect",
+                        str(Path(__file__).resolve()), "--serve", "--state", str(args.state)], env=env, check=True)
+    for _ in range(50):
+        try:
+            with urllib.request.urlopen(f"http://127.0.0.1:{PORT}/api/knobs", timeout=1) as response:
+                if isinstance(json.load(response).get("values"), dict):
+                    break
+        except (urllib.error.URLError, ValueError):
+            pass
+        time.sleep(0.1)
+    else:
+        raise RuntimeError("The CRT panel service did not become ready; inspect cuda-crt-controls.service.")
+    subprocess.run(["systemd-run", "--user", "--unit=cuda-crt-controls-window-" + str(os.getpid()), "--collect",
+                    "--slice=app.slice", "--setenv=WAYLAND_DISPLAY=" + env["WAYLAND_DISPLAY"],
+                    "--setenv=XDG_RUNTIME_DIR=" + env["XDG_RUNTIME_DIR"], "/usr/bin/chromium",
+                    "--ozone-platform=wayland", "--app=http://127.0.0.1:" + str(PORT) + "/"], env=env, check=True)
+
+
+if __name__ == "__main__":
+    main()

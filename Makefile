@@ -40,4 +40,7 @@ bin/cuda-pass-doom.so: hypr/cuda-pass.cpp hypr/build src/cuda_path.hpp src/cudar
 doom: bin/cuda-pass-doom.so
 	tools/doom.sh --crt
 
-.PHONY: all toolchain clean doom-setup doom
+crt-config:
+	tools/crt-config
+
+.PHONY: all toolchain clean doom-setup doom crt-config

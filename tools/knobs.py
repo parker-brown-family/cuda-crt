@@ -121,6 +121,17 @@ async function start(){
   const reset=document.getElementById('reset');reset.disabled=false;
   reset.addEventListener('click',()=>{for(const d of dials)values[d.name]=d.default;preset=null;changed();});
   paint();message('Ready · revision '+saved.rev);
+  // Another writer (DOOM's own menu) may move a dial while this page is open.
+  let rev=saved.rev;
+  setInterval(async()=>{
+    if(document.hidden||busy||dirty||timer!==null)return;
+    const at=generation;
+    try{
+      const now=await api('/api/knobs');
+      if(at!==generation||busy||dirty||now.rev===rev)return;
+      rev=now.rev;values=Object.assign(Object.create(null),now.values);preset=now.preset;paint();
+    }catch(error){}
+  },1000);
 }
 start().catch(error=>message('Could not load controls: '+error.message,true));
 </script></body></html>'''

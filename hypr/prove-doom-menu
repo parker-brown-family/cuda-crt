@@ -1,0 +1,116 @@
+#!/usr/bin/env python3
+"""Walk DOOM's own CRT menu with real key presses in the sealed seat.  hypr/prove-doom-menu STATE OUT"""
+from pathlib import Path
+import sys
+
+HERE = str(Path(__file__).resolve().parent.parent)
+src = Path(HERE, "hypr/prove").read_text().split("which = sys.argv[3]")[0]
+exec(compile(src, "hypr/prove", "exec"))
+up("HEADLESS-1 1280x960@60 1 0 0 0")
+runner = None
+
+
+def keys(*names):
+    args = ["-s", "600"]
+    for n in names:
+        args += ["-P", n, "-s", "60", "-p", n, "-s", "130"]
+    r = subprocess.run([S + "/in", "wtype", *args], capture_output=True, text=True, timeout=40)
+    if r.returncode:
+        raise RuntimeError("virtual keyboard failed: " + r.stderr)
+    time.sleep(0.4)
+
+
+def dials(name="set"):
+    p = Path(FL, name)
+    if not p.exists():
+        return None
+    return {k: float(v) for k, v in (x.split("=") for x in p.read_text().strip().split(",") if "=" in x)}
+
+
+def start(*command):
+    global runner
+    runner = subprocess.Popen([S + "/in", "env", *command, "-warp", "1", "1", "-nomonsters", "-nosound"],
+                              stdout=open(OUT + "/menu.log", "w"), stderr=subprocess.STDOUT, start_new_session=True)
+    crt = "SDL_VIDEODRIVER=wayland" not in command
+    for _ in range(200):
+        if any(w["class"] == "crispy-doom" for w in windows()) and (not crt or "ready:" in log().rsplit("unloaded:", 1)[-1]):
+            time.sleep(3)
+            return
+        if runner.poll() is not None:
+            raise RuntimeError(Path(OUT, "menu.log").read_text()[-2500:])
+        time.sleep(0.1)
+    raise RuntimeError("DOOM did not start")
+
+
+def stop(menu_open):
+    """Quit as a player does: F10, then y. The launcher puts everything back before it ends."""
+    keys(*(["Escape"] if menu_open else []), "F10", "y")
+    runner.wait(timeout=20)
+    for _ in range(40):
+        if not windows():
+            return
+        time.sleep(0.25)
+
+
+# Esc opens the main menu on New Game; Options is below it; CRT Glass is last in Options.
+OPEN = ("Escape", "Down", "Return", "Up", "Return")
+try:
+    put("set", "glow=0.12,someone_elses=7\n")
+    saved = Path(FL, "set").read_bytes()
+    start(HERE + "/tools/doom-launch")
+    base = dials()
+    keys("Escape", "Down", "Return", "Up"); shot("menu-1-options")
+    keys("Return"); one = shot("menu-2-phosphor")
+    verdict(dials() == base, "opening the CRT page changes no dial")
+    # power, preset, reset, (gap), ghost, ghost linger, halation
+    keys("Down", "Down", "Down", "Down", "Down", "Right", "Right", "Right")
+    d = dials()
+    verdict(abs(d["halation"] - 0.14) < 1e-4, "three presses right raise halation three steps", f"0.08 -> {d['halation']}")
+    verdict(dials("tube-profile.set") == d, "the change is saved for the next session")
+    keys("Left"); verdict(abs(dials()["halation"] - 0.12) < 1e-4, "left lowers it one step", str(dials()["halation"]))
+    before = shot("menu-3-flat")
+    keys("Next"); shot("menu-4-tube")
+    keys(*["Right"] * 15)
+    after = shot("menu-5-warped")
+    verdict(abs(dials()["curv"] - 2.2) < .09, "page down reaches the glass page and its first dial is the warp", str(dials()["curv"]))
+    verdict(before and after and differ(before[2], after[2]) > 0.2, "the picture bends while the menu is open",
+            "%.0f%% of sampled pixels" % (100 * differ(before[2], after[2])))
+    keys("Next"); shot("menu-6-motion")
+    keys("Next", "Up", "Up", "Up", "Up")   # back to page one; from halation: linger, ghost, reset, preset
+    keys("Right"); p1 = dials()
+    verdict(p1["curv"] == 1 and p1["halation"] == 0.3, "preset House green is applied whole")
+    keys("Right", "Right"); verdict(dials()["track_bend"] == 28, "presets cycle on to Worn tape"); shot("menu-7-worn-tape")
+    keys("Down", "Return"); r = dials()
+    verdict(r["halation"] == 0.08 and r["track_bend"] == 6 and r["curv"] == 1, "reset returns to the DOOM look")
+    on = shot("menu-8-on")
+    keys("Up", "Up", "Return"); time.sleep(1)
+    off = shot("menu-9-off")
+    n = frames(); time.sleep(1)
+    verdict(Path(FL, "off").exists() and n == frames(), "power off: the pass draws no more frames", f"stays at {n}")
+    verdict(on and off and differ(on[2], off[2]) > 0.2, "the glass is gone from the picture", "%.0f%%" % (100 * differ(on[2], off[2])))
+    keys("Return"); time.sleep(1.5)
+    again = shot("menu-10-on-again")
+    verdict(not Path(FL, "off").exists() and differ(off[2], again[2]) > 0.2 and "DEAD" not in log(), "power on brings it back")
+    # another tool writes while the menu is open: the menu's next press must not undo it
+    put("set", Path(FL, "set").read_text().replace("scan=0.22", "scan=0.4").strip() + ",someone_elses=7\n")
+    keys("Down", "Down", "Down", "Right"); m = dials()
+    verdict(abs(m["scan"] - 0.4) < 1e-6 and m.get("someone_elses") == 7, "the menu keeps a dial the panel moved, and pairs it does not know")
+    profile = Path(FL, "tube-profile.set").read_bytes()
+    stop(True)
+    verdict(Path(FL, "set").read_bytes() == saved and not Path(FL, "off").exists(), "closing DOOM restores the earlier set file")
+    verdict(Path(FL, "tube-profile.set").read_bytes() == profile, "the saved look survives closing DOOM")
+    start(HERE + "/tools/doom-launch")
+    verdict(dials()["scan"] == m["scan"], "the next DOOM starts on the saved look")
+    stop(False)
+    start("SDL_VIDEODRIVER=wayland", HERE + "/tools/doom.sh")
+    keys(*OPEN); keys("Right"); time.sleep(.5)
+    verdict(Path(FL, "tube-profile.set").read_bytes() == profile, "DOOM started without the CRT offers no CRT page and writes nothing")
+    stop(True)
+    verdict(alive(), "the compositor still answers")
+    json.dump({"failed": fails, "checks": results}, open(OUT + "/menu-proof.json", "w"), indent=2)
+finally:
+    if runner is not None and runner.poll() is None:
+        os.killpg(os.getpgid(runner.pid), signal.SIGKILL)
+    down()
+print("all checks passed" if not fails else f"{fails} FAILED")
+sys.exit(1 if fails else 0)

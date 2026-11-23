@@ -2,8 +2,10 @@
 """Build the pinned DOOM engine and CUDA plugin inside this checkout."""
 import hashlib
 import os
+import shutil
 from pathlib import Path
 import subprocess
+import sys
 import tempfile
 import urllib.request
 
@@ -22,6 +24,38 @@ def sha(path):
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
+def engine_status():
+    return subprocess.check_output(["git", "-C", str(SOURCE), "status", "--porcelain"], text=True).strip()
+
+
+# The CRT menu: a patch to the engine's menu, and the files it compiles in. Both are
+# taken off and put back by name, so an edit anyone else made to the engine is never lost.
+PATCH = ROOT / "doom/crispy-crt-menu.patch"
+APPLIED = ROOT / ".toolchain/crispy-crt-menu.applied.patch"
+OURS = ("m_crt.c", "m_crt.h", "m_crt_dials.h")
+
+
+def unpatch():
+    if not engine_status():
+        return
+    was = APPLIED if APPLIED.exists() else PATCH
+    if subprocess.run(["git", "-C", str(SOURCE), "apply", "--reverse", str(was)]).returncode:
+        raise RuntimeError("The local Crispy Doom source has changes; leave it intact and select a clean checkout.")
+    ours = {"?? src/doom/" + name for name in OURS}
+    left = [line for line in engine_status().splitlines() if line.strip() not in ours]
+    if left:
+        run("git", "-C", str(SOURCE), "apply", str(was))
+        raise RuntimeError("The local Crispy Doom source has changes besides the CRT menu: " + ", ".join(left))
+
+
+def patch():
+    run("git", "-C", str(SOURCE), "apply", str(PATCH))
+    shutil.copyfile(PATCH, APPLIED)
+    for name in OURS[:2]:
+        shutil.copyfile(ROOT / "doom" / name, SOURCE / "src/doom" / name)
+    run(sys.executable, str(ROOT / "tools/live_dials.py"), str(SOURCE / "src/doom/m_crt_dials.h"))
+
+
 def main():
     SOURCE.parent.mkdir(parents=True, exist_ok=True)
     cloned = not SOURCE.exists()
@@ -29,11 +63,12 @@ def main():
         run("git", "clone", "--no-checkout", "--depth", "1",
             "https://github.com/fabiangreffrath/crispy-doom.git", str(SOURCE))
     head = subprocess.check_output(["git", "-C", str(SOURCE), "rev-parse", "HEAD"], text=True).strip()
-    if not cloned and subprocess.check_output(["git", "-C", str(SOURCE), "status", "--porcelain"], text=True).strip():
-        raise RuntimeError("The local Crispy Doom source has changes; leave it intact and select a clean checkout.")
+    if not cloned:
+        unpatch()
     if head != REV:
         run("git", "-C", str(SOURCE), "fetch", "--depth", "1", "origin", REV)
     run("git", "-C", str(SOURCE), "checkout", "--detach", REV)
+    patch()
     mixer = ROOT / ".toolchain/SDL_mixer"
     audio = ROOT / ".toolchain/audio"
     if not mixer.exists():

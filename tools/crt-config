@@ -12,7 +12,8 @@ import urllib.error
 import urllib.request
 from http.server import ThreadingHTTPServer
 
-from knobs import Handler, Knobs, read_json
+import live_dials
+from knobs import Handler, Knobs, number
 
 ROOT = Path(__file__).resolve().parent.parent
 PORT = 8788
@@ -35,47 +36,44 @@ class LiveKnobs(Knobs):
     def __init__(self, state):
         self.state = Path(state)
         self.live = False
-        # Only expose controls implemented by the compositor pass. The offline
-        # renderer also has per-channel decay and rise controls that it lacks.
-        excluded = {"decay_r", "decay_g", "decay_b", "rise", "ghost_rise"}
-        dials = [d for d in read_json(ROOT / "tools/dials.json") if d["name"] not in excluded]
-        for name, label, group, low, high, step, default, unit, help_ in (
-            ("decay", "Phosphor fade", "Phosphor", 1, 400, 1, 50, "ms", "How long the light takes to fade"),
-            ("core", "Flat middle", "Tube", 0, .95, .01, 0, "", "Keep the middle flat and bend toward the rim"),
-            ("inset", "Safe edge", "Tube", 0, .12, .005, .06, "", "Draw the picture smaller inside the glass"),
-            ("glow_knee", "Glow threshold", "Phosphor", 0, 1, .01, .02, "", "How bright a pixel must be before it glows")):
-            if not any(d["name"] == name for d in dials):
-                dials.append(dict(name=name, label=label, group=group, min=low, max=high,
-                                  step=step, default=default, unit=unit, help=help_))
-        presets = {}
-        for name, original in read_json(ROOT / "tools/presets.json").items():
-            values = dict(original)
-            channels = [values.pop(k) for k in ("decay_r", "decay_g", "decay_b") if k in values]
-            if channels:
-                if len(channels) != 3 or len(set(channels)) != 1:
-                    continue
-                values["decay"] = channels[0]
-            if values.pop("ghost_rise", 500) != 500:
-                continue
-            presets[name] = values
+        dials, presets = live_dials.load()
         super().__init__(dials, presets, self.state / "controls.json")
-        defaults = {d["name"]: d["default"] for d in self.dials}
-        source = self.state / "set"
-        if not source.exists():
-            source = self.state / "tube-profile.set"
-        restored, self.extra = {}, {}
-        if source.exists():
-            for part in source.read_text().replace("\n", ",").split(","):
-                if "=" not in part:
-                    continue
-                key, value = (p.strip() for p in part.split("=", 1))
-                if key in self.by_name:
-                    restored[key] = float(value)
-                else:
-                    self.extra[key] = value
-        self.current["values"] = {**defaults, **self.clamp(restored)}
+        self.seen = None
+        self.adopt()
         self.current["preset"] = None
         self.live = True  # Opening the panel does not change the active effect.
+
+    def adopt(self):
+        """Take up what is on disk: DOOM's own menu writes the same files."""
+        source = self.state / "tube-profile.set"
+        if not source.exists():
+            source = self.state / "set"
+        text = source.read_text() if source.exists() else ""
+        if text == self.seen:
+            return
+        restored, extra = {}, {}
+        for part in text.replace("\n", ",").split(","):
+            if "=" not in part:
+                continue
+            key, value = (p.strip() for p in part.split("=", 1))
+            if key in self.by_name:
+                try:
+                    restored[key] = number(float(value))
+                except ValueError:
+                    continue
+            else:
+                extra[key] = value
+        values = {**{d["name"]: d["default"] for d in self.dials}, **self.clamp(restored)}
+        if self.seen is not None and values != self.current["values"]:
+            self.current = {"rev": self.current["rev"] + 1, "preset": None, "values": values}
+        else:
+            self.current["values"] = values
+        self.extra, self.seen = extra, text
+
+    def snapshot(self):
+        with self.lock:
+            self.adopt()
+            return copy.deepcopy(self.current)
 
     def set(self, values, preset=None):
         if not self.live:
@@ -84,13 +82,14 @@ class LiveKnobs(Knobs):
         if preset is not None and (not isinstance(preset, str) or preset not in self.presets):
             raise ValueError("unknown preset")
         with self.lock:
+            self.adopt()
             next_state = {"rev": self.current["rev"] + 1, "preset": preset,
                           "values": {**self.current["values"], **values}}
             pairs = {**self.extra, **next_state["values"]}
             data = (",".join(f"{k}={v}" for k, v in pairs.items()) + "\n").encode()
             publish(self.state / "tube-profile.set", data)
             publish(self.state / "set", data)
-            self.current = next_state
+            self.current, self.seen = next_state, data.decode()
             return copy.deepcopy(next_state)
 
 

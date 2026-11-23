@@ -1,0 +1,40 @@
+#!/usr/bin/env bash
+# Put DOOM CRT on PATH and in the app menu; `tools/doom-install --remove` takes it off.
+set -euo pipefail
+root="$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)"
+bin="$HOME/.local/bin/doom-crt"
+data="${XDG_DATA_HOME:-$HOME/.local/share}"
+entry="$data/applications/doom-crt.desktop"
+icon="$data/icons/hicolor/scalable/apps/doom-crt.svg"
+if [[ "${1:-}" == --remove ]]; then
+  [[ "$(readlink -f "$bin" 2>/dev/null)" == "$root/tools/doom-launch" ]] && rm "$bin"
+  rm -f "$entry" "$icon"
+  echo "Removed. Your saves and CRT look are still in ~/.local/state/cuda-crt."
+  exit
+fi
+if [[ ! -x "$root/.toolchain/crispy-doom/build/src/crispy-doom" || ! -f "$root/bin/cuda-pass-doom.so" ]]; then
+  "$root/tools/doom-setup"
+fi
+if [[ -e "$bin" && "$(readlink -f "$bin")" != "$root/tools/doom-launch" ]]; then
+  echo "$bin is something else; leaving it alone." >&2
+  exit 1
+fi
+mkdir -p "$(dirname "$bin")" "$(dirname "$entry")" "$(dirname "$icon")"
+ln -sfn "$root/tools/doom-launch" "$bin"
+cp "$root/doom/doom-crt.svg" "$icon"
+cat >"$entry" <<EOF
+[Desktop Entry]
+Type=Application
+Name=DOOM CRT
+Comment=DOOM behind the CUDA CRT glass
+Exec="$bin"
+TryExec=$bin
+Icon=doom-crt
+Terminal=false
+StartupWMClass=crispy-doom
+Categories=Game;
+Keywords=doom;crt;cuda;
+EOF
+desktop-file-validate "$entry" 2>/dev/null || true
+update-desktop-database "$data/applications" 2>/dev/null || true
+echo "Installed: run doom-crt, or pick DOOM CRT from the app menu."

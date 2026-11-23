@@ -1,0 +1,271 @@
+diff --git i/src/doom/CMakeLists.txt w/src/doom/CMakeLists.txt
+index 0c014d6..d7d02a8 100644
+--- i/src/doom/CMakeLists.txt
++++ w/src/doom/CMakeLists.txt
+@@ -33,6 +33,7 @@ add_library(doom STATIC
+             info.c          info.h
+                             m_background.h
+             m_crispy.c      m_crispy.h
++            m_crt.c         m_crt.h
+             m_menu.c        m_menu.h
+             m_random.c      m_random.h
+             p_bexptr.c
+diff --git i/src/doom/m_menu.c w/src/doom/m_menu.c
+index 919258a..39a9885 100644
+--- i/src/doom/m_menu.c
++++ w/src/doom/m_menu.c
+@@ -63,6 +63,7 @@
+ 
+ #include "m_menu.h"
+ #include "m_crispy.h" // [crispy] Crispness menu
++#include "m_crt.h" // [cuda-crt] CRT glass menu
+ 
+ #include "v_trans.h" // [crispy] colored "invert mouse" message
+ 
+@@ -267,6 +268,7 @@ static void M_ClearMenus (void);
+ static void M_CrispnessCur(int choice);
+ static void M_CrispnessNext(int choice);
+ static void M_CrispnessPrev(int choice);
++static void M_CRT(int choice); // [cuda-crt] CRT glass menu
+ static void M_DrawCrispness1(void);
+ static void M_DrawCrispness2(void);
+ static void M_DrawCrispness3(void);
+@@ -401,6 +403,7 @@ enum
+     mousesens,
+     soundvol,
+     crispness, // [crispy] Crispness menu
++    crtglass, // [cuda-crt] CRT glass menu: last, so it can be left off
+     opt_end
+ } options_e;
+ 
+@@ -413,7 +416,8 @@ menuitem_t OptionsMenu[]=
+     {-1,"",0,'\0'},
+     {1,"M_MSENS",	M_Mouse,'m', "Mouse Sensitivity"}, // [crispy] mouse sensitivity menu
+     {1,"M_SVOL",	M_Sound,'s', "Sound Volume"},
+-    {1,"M_CRISPY",	M_CrispnessCur,'c', "Crispness"} // [crispy] Crispness menu
++    {1,"M_CRISPY",	M_CrispnessCur,'c', "Crispness"}, // [crispy] Crispness menu
++    {1,"M_CRTGLS",	M_CRT,'g', "CRT Glass"} // [cuda-crt] CRT glass menu
+ };
+ 
+ menu_t  OptionsDef =
+@@ -1401,7 +1405,7 @@ static const char *msgNames[2] = {"M_MSGOFF","M_MSGON"};
+ 
+ void M_DrawOptions(void)
+ {
+-    V_DrawPatchDirect(108, 15, W_CacheLumpName(DEH_String("M_OPTTTL"),
++    V_DrawPatchDirect(108, OptionsDef.y < 37 ? 6 : 15, W_CacheLumpName(DEH_String("M_OPTTTL"),
+                                                PU_CACHE));
+ 	
+     if (OptionsDef.lumps_missing == -1)
+@@ -1691,6 +1695,164 @@ static void M_Mouse(int choice)
+     M_SetupNextMenu(&MouseDef);
+ }
+ 
++// [cuda-crt] CRT glass menu. One page per group of dials. Nothing is painted behind
++// the text: the game stays in view, so every press shows on the glass at once.
++#define CRT_MAXPAGES 4
++#define CRT_MAXROWS 17
++#define CRT_TOPROWS 4   // page one only: power, preset, reset, a gap
++#define CRT_BARDOTS 11
++#define CRT_BARX 168
++#define CRT_VALUEX 232
++
++static menuitem_t CRTMenu[CRT_MAXPAGES][CRT_MAXROWS];
++static menu_t CRTDef[CRT_MAXPAGES];
++static int crt_page;
++
++static boolean M_InCRTMenu(void)
++{
++    return currentMenu >= &CRTDef[0] && currentMenu < &CRTDef[CRT_MAXPAGES];
++}
++
++static int M_CRTFirstDial(int page)
++{
++    return page == 0 ? CRT_TOPROWS : 0;
++}
++
++static void M_CRTDial(int choice)
++{
++    // 0 = left; 1 = right; 2 = enter, which moves a slider right as it does elsewhere
++    CRT_Nudge(crt_page, itemOn - M_CRTFirstDial(crt_page), choice ? 1 : -1);
++}
++
++static void M_CRTPower(int choice)
++{
++    CRT_Toggle();
++}
++
++static void M_CRTPreset(int choice)
++{
++    CRT_CyclePreset(choice ? 1 : -1);
++}
++
++static void M_CRTReset(int choice)
++{
++    CRT_Reset();
++}
++
++static void M_CRTGoto(int dir)
++{
++    crt_page = (crt_page + dir + CRT_NumPages()) % CRT_NumPages();
++    CRT_Load();
++    M_SetupNextMenu(&CRTDef[crt_page]);
++}
++
++static void M_CRTNext(int choice)
++{
++    M_CRTGoto(1);
++}
++
++static void M_CRTPrev(int choice)
++{
++    M_CRTGoto(-1);
++}
++
++static void M_CRT(int choice)
++{
++    M_CRTGoto(0);
++}
++
++static void M_CRTText(int x, int row, const char *color, const char *text)
++{
++    char line[80];
++    M_snprintf(line, sizeof(line), "%s%s", color, text);
++    M_WriteText(x, currentMenu->y + CRISPY_LINEHEIGHT * row, line);
++}
++
++static void M_DrawCRT(void)
++{
++    const int first = M_CRTFirstDial(crt_page), dials = CRT_PageDials(crt_page);
++    char text[80];
++    int i, j, x;
++
++    M_snprintf(text, sizeof(text), "CRT Glass %d/%d: %s", crt_page + 1, CRT_NumPages(), CRT_PageName(crt_page));
++    x = ORIGWIDTH / 2 - M_StringWidth(text) / 2;
++    M_CRTText(x, -1, crstr[CR_GOLD], text);
++
++    if (first)
++    {
++        M_snprintf(text, sizeof(text), "CRT: %s%s", CRT_On() ? crstr[CR_GREEN] : crstr[CR_DARK], CRT_On() ? "On" : "Off");
++        M_CRTText(currentMenu->x, 0, crstr[CR_NONE], text);
++        M_snprintf(text, sizeof(text), "Preset: %s%s", crstr[CR_GREEN], CRT_PresetName());
++        M_CRTText(currentMenu->x, 1, crstr[CR_NONE], text);
++        M_CRTText(currentMenu->x, 2, crstr[CR_NONE], "Reset to the DOOM look");
++    }
++
++    for (i = 0; i < dials; i++)
++    {
++        const int lit = (int) (CRT_Fraction(crt_page, i) * CRT_BARDOTS + 0.5f);
++        const char *const label = itemOn == first + i ? crstr[CR_GOLD] : crstr[CR_NONE];
++
++        M_CRTText(currentMenu->x, first + i, label, CRT_Label(crt_page, i));
++        for (j = 0; j < CRT_BARDOTS; j++)
++            text[j] = '-';
++        text[CRT_BARDOTS] = '\0';
++        M_CRTText(currentMenu->x + CRT_BARX, first + i, crstr[CR_DARK], text);
++        text[lit] = '\0';
++        if (lit)
++            M_CRTText(currentMenu->x + CRT_BARX, first + i, crstr[CR_GREEN], text);
++        CRT_ValueText(crt_page, i, text, sizeof(text));
++        M_CRTText(currentMenu->x + CRT_VALUEX, first + i, crstr[CR_GREEN], text);
++    }
++
++    M_CRTText(currentMenu->x, first + dials + 1, crstr[CR_GOLD], "Next Page >");
++    M_CRTText(currentMenu->x, first + dials + 2, crstr[CR_GOLD], "< Prev Page");
++    dp_translation = NULL;
++}
++
++static void M_InitCRT(void)
++{
++    int page, row;
++
++    if (!CRT_Available())
++    {
++        OptionsDef.numitems = crtglass;   // started without the CRT: nothing to set
++        return;
++    }
++
++    OptionsDef.y -= 11;   // the added row stays above the status bar
++    for (page = 0; page < CRT_NumPages(); page++)
++    {
++        menuitem_t *const items = CRTMenu[page];
++        const int first = M_CRTFirstDial(page), dials = CRT_PageDials(page);
++        const int rows = first + dials + 3;
++
++        if (page >= CRT_MAXPAGES || rows > CRT_MAXROWS)
++            I_Error("CRT menu: too many dials for one page");
++        for (row = 0; row < rows; row++)
++            items[row].status = -1;
++        if (first)
++        {
++            items[0].status = 3; items[0].routine = M_CRTPower; items[0].alphaKey = 'c';
++            items[1].status = 3; items[1].routine = M_CRTPreset; items[1].alphaKey = 'p';
++            items[2].status = 1; items[2].routine = M_CRTReset; items[2].alphaKey = 'r';
++        }
++        for (row = first; row < first + dials; row++)
++        {
++            items[row].status = 4; items[row].routine = M_CRTDial;
++            items[row].alphaKey = tolower(CRT_Label(page, row - first)[0]);
++        }
++        items[rows - 2].status = 1; items[rows - 2].routine = M_CRTNext; items[rows - 2].alphaKey = 'n';
++        items[rows - 1].status = 1; items[rows - 1].routine = M_CRTPrev; items[rows - 1].alphaKey = '<';
++
++        CRTDef[page].numitems = rows;
++        CRTDef[page].prevMenu = &OptionsDef;
++        CRTDef[page].menuitems = items;
++        CRTDef[page].routine = M_DrawCRT;
++        CRTDef[page].x = 20;
++        CRTDef[page].y = 17;   // the longest page ends above the status bar, which is not repainted
++    }
++}
++
+ static void M_CrispnessCur(int choice)
+ {
+     M_SetupNextMenu(CrispnessMenus[crispness_cur]);
+@@ -3021,7 +3183,13 @@ boolean M_Responder (event_t* ev)
+     else if (key == KEY_PGUP)
+     {
+ 	currentMenu->lastOn = itemOn;
+-	if (currentMenu == CrispnessMenus[crispness_cur])
++	if (M_InCRTMenu()) // [cuda-crt] CRT glass menu
++	{
++	    M_CRTPrev(0);
++	    S_StartSoundOptional(NULL, sfx_mnuact, sfx_swtchn);
++	    return true;
++	}
++	else if (currentMenu == CrispnessMenus[crispness_cur])
+ 	{
+ 	    M_CrispnessPrev(0);
+ 	    S_StartSoundOptional(NULL, sfx_mnuact, sfx_swtchn); // [NS] Optional menu sounds.
+@@ -3042,7 +3210,13 @@ boolean M_Responder (event_t* ev)
+     else if (key == KEY_PGDN)
+     {
+ 	currentMenu->lastOn = itemOn;
+-	if (currentMenu == CrispnessMenus[crispness_cur])
++	if (M_InCRTMenu()) // [cuda-crt] CRT glass menu
++	{
++	    M_CRTNext(0);
++	    S_StartSoundOptional(NULL, sfx_mnuact, sfx_swtchn);
++	    return true;
++	}
++	else if (currentMenu == CrispnessMenus[crispness_cur])
+ 	{
+ 	    M_CrispnessNext(0);
+ 	    S_StartSoundOptional(NULL, sfx_mnuact, sfx_swtchn); // [NS] Optional menu sounds.
+@@ -3253,7 +3427,7 @@ void M_Drawer (void)
+ 
+     
+     // DRAW SKULL
+-    if (currentMenu == CrispnessMenus[crispness_cur])
++    if (currentMenu == CrispnessMenus[crispness_cur] || M_InCRTMenu())
+     {
+ 	char item[4];
+ 	M_snprintf(item, sizeof(item), "%s>", whichSkull ? crstr[CR_NONE] : crstr[CR_DARK]);
+@@ -3332,6 +3506,7 @@ void M_Init (void)
+     messageLastMenuActive = menuactive;
+     quickSaveSlot = -1;
+ 
++    M_InitCRT(); // [cuda-crt] CRT glass menu
+     M_SetDefaultDifficulty(); // [crispy] pre-select default difficulty
+ 
+     // Here we could catch other version dependencies,

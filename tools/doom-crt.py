@@ -11,6 +11,8 @@ import subprocess
 import sys
 import time
 
+from live_dials import DOOM_LOOK
+
 ROOT = Path(__file__).resolve().parent.parent
 
 
@@ -28,6 +30,7 @@ def main():
     env.setdefault("SDL_VIDEODRIVER", "wayland")
     state = Path(env.get("XDG_STATE_HOME", str(Path.home() / ".local/state"))) / "cuda-crt"
     state.mkdir(parents=True, exist_ok=True)
+    env["CUDA_CRT_STATE"] = str(state)  # what makes Options > CRT Glass appear in the game
     lock = open(state / "doom-session.lock", "w")
     try:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -55,7 +58,9 @@ def main():
     old_plugin = previous["loaded"].decode().strip() if previous["loaded"] else None
     if loaded and (not old_plugin or not Path(old_plugin).is_file()):
         raise RuntimeError("The existing CUDA plugin has no recoverable loaded path; record its path in cuda-crt/loaded first.")
-    plugin = state / ("cuda-pass-doom-" + str(os.getpid()) + ".so")
+    # Never a name used before: Hyprland keeps an unloaded plugin mapped, so loading the same
+    # path again answers with the old copy, already finished, and the game gets no glass.
+    plugin = state / ("cuda-pass-doom-" + str(time.time_ns()) + ".so")
     shutil.copyfile(built, plugin)
     game = None
     installed = old_removed = False
@@ -66,7 +71,7 @@ def main():
         put("root", (str(ROOT) + "\n").encode())
         put("look", b"tube\n")
         profile = state / "tube-profile.set"
-        put("set", profile.read_bytes() if profile.exists() else b"halation=0.08,glow=0.15,beam=0.2,glow_knee=0.2\n")
+        put("set", profile.read_bytes() if profile.exists() else (",".join(f"{k}={v}" for k, v in DOOM_LOOK.items()) + "\n").encode())
         for name in ("off", "ttl"):
             (state / name).unlink(missing_ok=True)
         args = [str(ROOT / "tools/doom.sh"), "-nogui"]

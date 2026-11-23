@@ -158,6 +158,20 @@ For a window instead:
 tools/doom.sh --crt --windowed
 ```
 
+Or install it as an application: `doom-crt` on your PATH and **DOOM CRT** in the app
+menu (`make doom-uninstall` takes both off). With no terminal to print to, a failure
+becomes a desktop notification and `~/.local/state/cuda-crt/doom-launch.log`:
+
+```bash
+make doom-install
+```
+
+**The CRT's settings are in the game:** Esc, Options, CRT Glass. Three pages hold every
+dial the pass reads, plus power, presets and a reset; left and right move a dial, Page
+Up and Page Down turn the page, and the glass changes as you press. The look is saved
+for the next session in the same file the settings panel uses, and either can be open
+while the other is changed. DOOM started without `--crt` has no such page.
+
 WASD or arrows move forward/back and strafe. The mouse turns and aims up/down;
 left-click fires, E or right-click uses doors, Shift runs, and 1–7 or the wheel
 selects weapons. Alt+Enter toggles the game's fullscreen mode; Esc opens its
@@ -211,6 +225,18 @@ PREVIOUS=1 hypr/prove-doom-session /tmp/cuda-doom-session-seat reports/doom-sess
 by the live launcher. The original `hypr/prove-doom` movie/input proof remains
 available with a local Chocolate Doom build; its sampled 5 fps capture is
 visual evidence, not a gameplay performance measurement.
+
+The menu proof walks every page with real key presses and checks the files, the
+picture, the saved look and a second launch:
+
+```bash
+hypr/prove-doom-menu /tmp/cuda-menu-seat reports/doom-menu
+```
+
+The menu is `doom/crispy-crt-menu.patch` and `doom/m_crt.c`, applied to the pinned
+engine by `make doom-setup`. Those files are GPL-2.0-or-later like the engine they
+modify; the rest of this repository stays MIT. Their dial table is generated from
+`tools/dials.json` and `tools/presets.json`, the panel's own source.
 
 ## Dials
 

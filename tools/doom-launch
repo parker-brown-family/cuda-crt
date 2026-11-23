@@ -1,0 +1,17 @@
+#!/usr/bin/env bash
+# The double-click DOOM: no terminal, so anything that goes wrong becomes a notification.
+# `make doom-install` links it as ~/.local/bin/doom-crt and puts it in the app menu.
+set -uo pipefail
+root="$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)"
+state="${XDG_STATE_HOME:-$HOME/.local/state}/cuda-crt"
+mkdir -p "$state"
+log="$state/doom-launch.log"
+"$root/tools/doom.sh" --crt "$@" >"$log" 2>&1
+status=$?
+# 130 is an ordinary interruption (logging out, Ctrl+C).
+if (( status != 0 && status != 130 )); then
+  why="$(grep -v '^[[:space:]]*$' "$log" | tail -n 1)"
+  [[ -t 2 ]] && echo "doom-crt: ${why:-stopped with status $status}  ($log)" >&2
+  notify-send -a "DOOM CRT" "DOOM CRT stopped" "${why:-Status $status}. Log: $log" 2>/dev/null || true
+fi
+exit "$status"
